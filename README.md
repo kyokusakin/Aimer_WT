@@ -1,6 +1,12 @@
 # Aimer WT
 
 用于 War Thunder 的语音包管理/安装工具。桌面端基于 Python + PyWebview，前端静态资源在 `web/` 目录。
+上传的文件都经过了opus重构和注释，应该比我自己的要工整，
+
+## 开发者信息
+
+- **作者：** AimerSo
+- **B站主页：** [个人主页](https://space.bilibili.com/1379084732)
 
 ## 功能
 
