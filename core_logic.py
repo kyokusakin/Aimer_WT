@@ -3,7 +3,7 @@
 import os
 import shutil
 import threading
-import winreg
+#import winreg
 import re
 import stat
 from pathlib import Path
@@ -47,7 +47,9 @@ class CoreService:
         t.daemon = True
         t.start()
 
-    def auto_detect_game_path(self):
+    
+    def get_windows_game_paths(self):
+        import winreg
         self.log("开始全盘搜索游戏路径...", "SEARCH")
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Valve\Steam")
@@ -79,6 +81,46 @@ class CoreService:
                     return str(full_path)
         self.log("未自动找到游戏路径。", "FAIL")
         return None
+
+    def get_linux_game_paths(self):
+        self.log("开始检索 Linux Steam 库...", "SEARCH")
+        paths = set()
+        
+        # 1. 常见的 Steam 安装位置 (包括 Flatpak)
+        steam_roots = [
+            Path.home() / ".local/share/Steam",
+            Path.home() / ".steam/steam",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+        ]
+        
+        for root in [r for r in steam_roots if r.exists()]:
+            paths.add(str(root)) # 添加根目录本身作为备选
+            vdf_path = root / "config" / "libraryfolders.vdf"
+            if vdf_path.exists():
+                try:
+                    with open(vdf_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        # 提取所有库路径
+                        found = re.findall(r'"path"\s+"([^"]+)"', content)
+                        paths.update(found)
+                except Exception as e:
+                    self.log(f"解析 VDF 失败: {e}", "WARN")
+
+        # 2. 验证路径
+        for base_path in paths:
+            # Linux 下 Steam 默认文件夹名通常带空格
+            full_path = Path(base_path) / "steamapps/common/War Thunder"
+            if self._check_is_wt_dir(full_path):
+                return str(full_path) # 找到第一个就返回
+                
+        return None
+
+    def auto_detect_game_path(self):
+        import sys
+        if sys.platform == "win32":
+            return self.get_windows_game_path()
+        elif sys.platform == "linux":
+            return self.get_linux_game_paths()
 
     def _check_is_wt_dir(self, path):
         path = Path(path)
