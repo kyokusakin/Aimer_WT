@@ -9,6 +9,8 @@ import random
 import itertools
 import webview
 import base64
+import platform
+import subprocess
 from pathlib import Path
 
 AGREEMENT_VERSION = "2026-01-10"
@@ -284,7 +286,12 @@ class AppApi:
             path = self._cfg_mgr.get_game_path()
             if path and os.path.exists(path):
                 try:
-                    os.startfile(path)
+                    if platform.system() == "Windows":
+                        os.startfile(path)
+                    elif platform.system() == "Darwin":
+                        subprocess.Popen(["open", path])
+                    else:
+                        subprocess.Popen(["xdg-open", path])
                 except Exception as e:
                     self.log_from_backend(f"[ERROR] 打开游戏目录失败: {e}")
             else:

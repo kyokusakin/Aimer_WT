@@ -2,8 +2,11 @@
 # config_manager.py - 配置管理
 import json
 import os
+from pathlib import Path
 
-CONFIG_FILE = "settings.json"
+# 使用用户文档文件夹 Aimer_WT/settings.json
+DOCS_DIR = Path.home() / "Documents" / "Aimer_WT"
+CONFIG_FILE = DOCS_DIR / "settings.json"
 
 class ConfigManager:
     def __init__(self):
@@ -27,6 +30,10 @@ class ConfigManager:
 
     def save_config(self):
         try:
+            # 确保目录存在
+            if not DOCS_DIR.exists():
+                DOCS_DIR.mkdir(parents=True, exist_ok=True)
+                
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=4, ensure_ascii=False)
         except:

@@ -28,22 +28,21 @@ def setup_logger(name="WT_Voice_Manager"):
         
     logger.setLevel(logging.DEBUG)
     
-    # 确定日志目录
-    if getattr(sys, 'frozen', False):
-        # 打包环境
-        base_dir = Path(sys.executable).parent
-    else:
-        # 开发环境
-        base_dir = Path(__file__).parent
-        
-    log_dir = base_dir / "logs"
-    
+    # 确定日志目录 - 使用用户文档文件夹 Aimer_WT/logs
     try:
+        user_documents = Path.home() / "Documents"
+        base_dir = user_documents / "Aimer_WT"
+        log_dir = base_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
-        # 如果无法创建日志目录，使用临时目录
-        import tempfile
-        log_dir = Path(tempfile.gettempdir()) / "WT_Voice_Manager_Logs"
+        # 如果无法访问文档目录，回退到原来的逻辑
+        if getattr(sys, 'frozen', False):
+            # 打包环境
+            base_dir = Path(sys.executable).parent
+        else:
+            # 开发环境
+            base_dir = Path(__file__).parent
+        log_dir = base_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
     
     # 日志格式

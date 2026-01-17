@@ -6,6 +6,8 @@ import shutil
 import zipfile
 import json
 import re
+import platform
+import subprocess
 from collections import Counter
 from pathlib import Path
 
@@ -17,12 +19,15 @@ class LibraryManager:
     def __init__(self, log_callback):
         self.log = log_callback
         
-        if getattr(sys, 'frozen', False):
-            application_path = Path(sys.executable).parent
-        else:
-            application_path = Path(__file__).parent
+        # 使用用户文档文件夹 Aimer_WT 作为根目录
+        self.root_dir = Path.home() / "Documents" / "Aimer_WT"
+        
+        # 也可以保留原逻辑作为备份，或者直接覆盖
+        # if getattr(sys, 'frozen', False):
+        #     application_path = Path(sys.executable).parent
+        # else:
+        #     application_path = Path(__file__).parent
             
-        self.root_dir = application_path
         self.pending_dir = self.root_dir / DIR_PENDING
         self.library_dir = self.root_dir / DIR_LIBRARY
         
@@ -30,15 +35,28 @@ class LibraryManager:
 
     def _ensure_dirs(self):
         if not self.pending_dir.exists():
-            self.pending_dir.mkdir()
+            self.pending_dir.mkdir(parents=True)
         if not self.library_dir.exists():
-            self.library_dir.mkdir()
+            self.library_dir.mkdir(parents=True)
+
+    def _open_folder_cross_platform(self, path):
+        """Cross-platform folder opener"""
+        try:
+            path = str(path)
+            if platform.system() == "Windows":
+                os.startfile(path)
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.Popen(["open", path])
+            else:  # Linux
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            self.log(f"无法打开文件夹: {e}", "ERROR")
 
     def open_pending_folder(self):
-        os.startfile(self.pending_dir)
+        self._open_folder_cross_platform(self.pending_dir)
 
     def open_library_folder(self):
-        os.startfile(self.library_dir)
+        self._open_folder_cross_platform(self.library_dir)
 
     def scan_library(self):
         """扫描已解压的语音包列表"""
@@ -332,26 +350,38 @@ class LibraryManager:
     def _is_safe_path(self, path, base_dir):
         """
         [安全检查] 确保 path 在 base_dir 目录下，防止路径穿越或误删
-        [最高安全规则] C盘防误删保护 (加强版)
+        [最高安全规则] 系统盘防误删保护 (加强版 - 跨平台)
         """
         try:
             abs_path = Path(path).resolve()
             abs_base = Path(base_dir).resolve()
             path_str = str(abs_path).lower()
 
-            # 1. 绝对禁止删除 C 盘根目录或关键系统目录
-            forbidden_roots = ["c:\\", "c:/", "c:\\windows", "c:\\program files", "c:\\program files (x86)", "c:\\users"]
+            # 1. 绝对禁止删除系统根目录或关键系统目录
+            forbidden_roots = [
+                "c:\\", "c:/", "c:\\windows", "c:\\program files", "c:\\program files (x86)", "c:\\users",
+                "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/media", "/mnt", "/opt",
+                "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var"
+            ]
             if path_str in forbidden_roots:
                 return False
 
-            # 2. 如果路径在 C 盘，必须在 base_dir 白名单内
-            # 这里的 base_dir 应当是 library_dir (语音包库目录)
-            if abs_path.drive.lower() == "c:":
+            # 2. 如果路径在 C 盘(Windows)，必须在 base_dir 白名单内
+            if platform.system() == "Windows" and abs_path.drive.lower() == "c:":
                 if not str(abs_path).startswith(str(abs_base)):
                     return False
+            
+            # 3. Linux/Mac 基础保护 (不允许操作 / 根目录)
+            if platform.system() != "Windows":
+                 if str(abs_path) == "/":
+                     return False
 
-            # 3. 基础检查：是否在 base_dir 内部
-            return str(abs_path).startswith(str(abs_base))
+            # 4. 基础检查：是否在 base_dir 内部
+            # 兼容大小写不敏感系统(Windows/macOS) 和 敏感系统(Linux)
+            if platform.system() == "Windows":
+                 return str(abs_path).lower().startswith(str(abs_base).lower())
+            else:
+                 return str(abs_path).startswith(str(abs_base))
         except:
             return False
 
