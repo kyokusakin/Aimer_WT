@@ -61,6 +61,9 @@ def build_exe():
     # Add icon if exists and on Windows/Mac (Linux mostly ignores or handles differently)
     if os.name == 'nt':
         cmd.extend(["--icon", "web/assets/logo.ico"])
+    else:
+        # Strip symbols on Linux/Mac to reduce size
+        cmd.append("--strip")
 
     print(f"执行命令: {' '.join(cmd)}")
     
