@@ -68,7 +68,8 @@ def build_exe():
     print(f"执行命令: {' '.join(cmd)}")
     
     try:
-        result = subprocess.run(cmd, check=True, shell=True, capture_output=True, text=True)
+        # shell=False ensures arguments are passed correctly on Linux without manual escaping
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(result.stdout)
         print(result.stderr)
     except subprocess.CalledProcessError as e:
