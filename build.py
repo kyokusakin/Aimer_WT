@@ -45,24 +45,23 @@ def build_exe():
         # 可选：清理旧的 dist
         pass
 
-    # PyInstaller 参数
-    # --noconsole: 不显示控制台窗口
-    # --onefile: 打包成单文件
-    # --add-data: 添加资源文件 (Windows下用 ; 分隔)
-    # --name: 指定生成的文件名
-    # --icon: 指定图标
+    # Os specific separator
+    sep = ';' if os.name == 'nt' else ':'
     
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconsole",
         "--onefile",
-        "--add-data", "web;web",  # 将 web 文件夹打包到 exe 内部的 web 目录
+        "--add-data", f"web{sep}web",  # 将 web 文件夹打包到 exe 内部的 web 目录
         "--name", "WT_Aimer_Voice",
-        "--icon", "web/assets/logo.ico",
         "--clean", # 清理 PyInstaller 缓存
         "main.py"
     ]
-    
+
+    # Add icon if exists and on Windows/Mac (Linux mostly ignores or handles differently)
+    if os.name == 'nt':
+        cmd.extend(["--icon", "web/assets/logo.ico"])
+
     print(f"执行命令: {' '.join(cmd)}")
     
     try:
@@ -84,7 +83,8 @@ def build_exe():
         traceback.print_exc()
         sys.exit(1)
     else:
-        exe_path = Path("dist/WT_Aimer_Voice.exe")
+        exe_name = "WT_Aimer_Voice.exe" if os.name == 'nt' else "WT_Aimer_Voice"
+        exe_path = Path("dist") / exe_name
         print(f"[OK] 打包成功！")
         print(f"输出文件: {exe_path}")
         return True
@@ -96,14 +96,17 @@ def main():
         return
 
     # 2. 生成校验文件
-    exe_path = Path("dist/WT_Aimer_Voice.exe")
+    # Determine exe name based on OS
+    exe_name = "WT_Aimer_Voice.exe" if os.name == 'nt' else "WT_Aimer_Voice"
+    exe_path = Path("dist") / exe_name
+    
     if not exe_path.exists():
-        print("❌ 未找到生成的 exe 文件！")
+        print(f"❌ 未找到生成的 exe 文件！: {exe_path}")
         return
 
     print("🔐 正在生成校验文件...")
     checksum = calculate_checksum(exe_path, 'sha256')
-    checksum_file = dist_dir = Path("dist/checksum.txt")
+    checksum_file = Path("dist/checksum.txt")
     
     with open(checksum_file, 'w', encoding='utf-8') as f:
         f.write(f"File: {exe_path.name}\n")
