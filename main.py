@@ -19,7 +19,7 @@ AGREEMENT_VERSION = "2026-01-10"
 from core_logic import CoreService
 from config_manager import ConfigManager
 from library_manager import LibraryManager
-from logger import setup_logger  # [P1 修复] 引入日志管理模块
+from logger import get_logger, set_ui_callback  # [P1 修复] 引入日志管理模块
 
 # 解决 PyInstaller 打包后的路径问题
 if getattr(sys, 'frozen', False):
@@ -30,6 +30,8 @@ else:
 
 WEB_DIR = BASE_DIR / "web"
 
+log = get_logger(__name__)
+
 class AppApi:
     """
     这是 Python 和 Web 前端通信的桥梁。
@@ -39,8 +41,8 @@ class AppApi:
         # [P1 修复] 引入线程锁保护并发操作
         self._lock = threading.Lock()
         
-        # [P1 修复] 初始化持久化日志记录器
-        self._logger = setup_logger()
+        # 连接 logger -> 前端 UI（窗口未创建时会自动忽略）
+        set_ui_callback(self._append_log_to_ui)
         
         # [关键修复] 将 window 改为 _window。
         # 加下划线表示私有变量，pywebview 就不会尝试去扫描和序列化整个窗口对象，
@@ -49,9 +51,8 @@ class AppApi:
         
         # [关键修复] 同理，将管理器对象也改为私有，防止扫描 Path 对象导致递归溢出
         self._cfg_mgr = ConfigManager()
-        self._lib_mgr = LibraryManager(self.log_from_backend)
+        self._lib_mgr = LibraryManager()
         self._logic = CoreService()
-        self._logic.set_callbacks(self.log_from_backend)
         
         self._search_running = False
         self._is_busy = False
@@ -59,26 +60,52 @@ class AppApi:
     def set_window(self, window):
         self._window = window
 
+    def _append_log_to_ui(self, formatted_message: str):
+        """将 logger 的输出追加到前端日志面板"""
+        if not self._window:
+            return
+        try:
+            safe_msg = formatted_message.replace("\r", "").replace("\n", "<br>")
+            msg_js = json.dumps(safe_msg, ensure_ascii=False)
+            webview.settings["ALLOW_DOWNLOADS"] = True
+            self._window.evaluate_js(f"app.appendLog({msg_js})")
+        except Exception:
+            # 避免在日志回调中抛异常导致业务中断
+            log.exception("日志推送失败")
+
     # --- 日志回调 ---
     def log_from_backend(self, message, level="INFO"):
-        """核心逻辑产生的日志，通过这里推送到前端"""
-        # [P1 修复] 同时记录到文件
-        try:
-            log_level_map = {
-                "INFO": self._logger.info,
-                "WARN": self._logger.warning,
-                "ERROR": self._logger.error,
-                "SUCCESS": self._logger.info,
-                "SYS": self._logger.debug
-            }
-            log_func = log_level_map.get(level, self._logger.info)
-            # 如果 message 已经包含了时间戳前缀，记录时可以不用去管，
-            # 或者为了日志文件的整洁，可以尝试剥离前缀（这里暂且直接记录）
-            log_func(f"[{level}] {message}")
-        except Exception as e:
-            print(f"日志文件写入失败: {e}")
+        """核心逻辑产生的日志，通过这里推送到前端（兼容旧逻辑）"""
+        tag = str(level or "INFO").upper()
+        msg = str(message)
 
-        if self._window:
+        # 允许 message 自带前缀（例如: "[WARN] xxx"）覆盖 level 参数
+        if msg.startswith("[") and "]" in msg:
+            maybe = msg[1 : msg.find("]")].upper()
+            if maybe in {"INFO", "WARN", "WARNING", "ERROR", "SUCCESS", "SYS"}:
+                tag = maybe
+                msg = msg[msg.find("]") + 1 :].lstrip()
+
+        if tag in {"WARN", "WARNING"}:
+            log.warning(msg)
+        elif tag == "ERROR":
+            log.error(msg)
+        elif tag == "SUCCESS":
+            if not msg.startswith("[SUCCESS]"):
+                msg = f"[SUCCESS] {msg}"
+            log.info(msg)
+        elif tag == "SYS":
+            if not msg.startswith("[SYS]"):
+                msg = f"[SYS] {msg}"
+            log.info(msg)
+        else:
+            if tag != "INFO" and not msg.startswith(f"[{tag}]"):
+                msg = f"[{tag}] {msg}"
+            log.info(msg)
+
+        return
+
+        if self._window:  # dead code
             try:
                 # 兼容 LibraryManager 的多参数调用 (message, level)
                 # 如果是 CoreService 调用的，message 已经包含了时间戳和级别，level 默认为 INFO
@@ -93,7 +120,7 @@ class AppApi:
                 webview.settings['ALLOW_DOWNLOADS'] = True
                 self._window.evaluate_js(f"app.appendLog({msg_js})")
             except Exception as e:
-                print(f"日志推送失败: {e}")
+                pass
 
     # --- 窗口控制 ---
     def toggle_topmost(self, is_top):
@@ -105,7 +132,7 @@ class AppApi:
                 try:
                     self._window.on_top = is_top
                 except Exception as e:
-                    print(f"置顶设置失败: {e}")
+                    log.error(f"置顶设置失败: {e}")
 
         t = threading.Thread(target=_update_topmost)
         t.daemon = True
@@ -268,7 +295,7 @@ class AppApi:
                         b64_data = base64.b64encode(f.read()).decode('utf-8')
                         details["cover_url"] = f"data:image/{ext};base64,{b64_data}"
                 except Exception as e:
-                    print(f"图片转码失败: {e}")
+                    log.error(f"图片转码失败: {e}")
             
             # 补充 ID
             details["id"] = mod
@@ -311,7 +338,7 @@ class AppApi:
                 msg_js = json.dumps(safe_msg, ensure_ascii=False)
                 self._window.evaluate_js(f"if(window.MinimalistLoading) MinimalistLoading.update({safe_progress}, {msg_js})")
             except Exception as e:
-                print(f"Loading UI 更新失败: {e}")
+                log.error(f"Loading UI 更新失败: {e}")
 
     def import_zips(self):
         """解压 ZIP (在后台线程)"""
@@ -589,7 +616,7 @@ class AppApi:
                         "version": meta.get("version", "1.0")
                     })
             except Exception as e:
-                print(f"读取主题 {file.name} 失败: {e}")
+                log.error(f"读取主题 {file.name} 失败: {e}")
         
         return theme_list
 
@@ -608,7 +635,7 @@ class AppApi:
             with open(theme_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"加载主题失败: {e}")
+            log.error(f"加载主题失败: {e}")
             return None
 
 
@@ -626,7 +653,7 @@ def on_app_started():
         try:
             import pyi_splash
             pyi_splash.close()
-            print("[INFO] Splash screen closed.", flush=True)
+            log.info("[INFO] Splash screen closed.")
         except ImportError:
             pass
     
@@ -636,7 +663,7 @@ def on_app_started():
                 win = webview.windows[0]
                 win.evaluate_js("if (window.app && app.recoverToSafeState) app.recoverToSafeState('backend_start');")
                 state = win.evaluate_js("JSON.stringify({activePage: (document.querySelector('.page.active')||{}).id || null, openModals: Array.from(document.querySelectorAll('.modal-overlay.show')).map(x=>x.id)})")
-                print(f"[UI_STATE] {state}", flush=True)
+                log.info(f"[UI_STATE] {state}")
                 break
         except Exception:
             time.sleep(0.2)
@@ -662,7 +689,7 @@ if __name__ == '__main__':
             start_x = None
             start_y = None
     except Exception as e:
-        print(f"获取屏幕信息失败: {e}")
+        log.error(f"获取屏幕信息失败: {e}")
         start_x = None
         start_y = None
 
@@ -691,8 +718,8 @@ if __name__ == '__main__':
     icon_path = str(WEB_DIR / "assets" / "logo.ico")
     try:
         # 尝试使用 edgechromium 内核（性能更好）
-        webview.start(debug=False, http_server=False, gui='edgechromium', func=on_app_started, icon=icon_path)
+        webview.start(debug=False, http_server=True, gui='edgechromium', func=on_app_started, icon=icon_path)
     except Exception as e:
-        print(f"Edge Chromium 启动失败，尝试默认模式: {e}")
+        log.error(f"Edge Chromium 启动失败，尝试默认模式: {e}")
         # 降级启动
-        webview.start(debug=False, http_server=False, func=on_app_started, icon=icon_path)
+        webview.start(debug=False, http_server=True, func=on_app_started, icon=icon_path)

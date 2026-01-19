@@ -10,15 +10,16 @@ import platform
 import subprocess
 from collections import Counter
 from pathlib import Path
+from logger import get_logger
+
+log = get_logger(__name__)
 
 # 定义标准文件夹名称
 DIR_PENDING = "WT待解压区"
 DIR_LIBRARY = "WT语音包库"
 
 class LibraryManager:
-    def __init__(self, log_callback):
-        self.log = log_callback
-        
+    def __init__(self):
         # 使用用户文档文件夹 Aimer_WT 作为根目录
         self.root_dir = Path.home() / "Documents" / "Aimer_WT"
         
@@ -38,6 +39,22 @@ class LibraryManager:
             self.pending_dir.mkdir(parents=True)
         if not self.library_dir.exists():
             self.library_dir.mkdir(parents=True)
+
+    def log(self, message, level="INFO"):
+        tag = str(level or "INFO").upper()
+        msg = str(message)
+
+        # 统一前缀：避免重复叠加
+        if tag != "INFO" and not msg.startswith(f"[{tag}]"):
+            msg = f"[{tag}] {msg}"
+
+        if tag in {"WARN", "WARNING"}:
+            log.warning(msg)
+        elif tag in {"ERROR"}:
+            log.error(msg)
+        else:
+            # INFO / SUCCESS / UNZIP / ... 都走 INFO
+            log.info(msg)
 
     def _open_folder_cross_platform(self, path):
         """Cross-platform folder opener"""
@@ -116,7 +133,7 @@ class LibraryManager:
                     for key in ["title", "author", "version", "date", "note", "link_bilibili", "link_wtlive", "link_video", "tags", "language"]:
                         if key in data: details[key] = data[key]
             except Exception as e:
-                print(f"读取 info.json 失败: {e}")
+                log.warning(f"读取 info.json 失败: {e}")
 
         # 3. 智能检测 (Fallback Logic)
         # 仅检测 Tags (功能标签)，语言完全听作者的
@@ -214,7 +231,7 @@ class LibraryManager:
                     continue
                     
         except Exception as e:
-            print(f"智能检测出错: {e}")
+            log.warning(f"智能检测出错: {e}")
             
         return list(detected_tags)
 
@@ -263,7 +280,7 @@ class LibraryManager:
                     except ValueError:
                         continue
         except Exception as e:
-            print(f"扫描文件夹出错: {e}")
+            log.warning(f"扫描文件夹出错: {e}")
         
         return sorted(list(folders_map.values()), key=lambda x: x["path"])
 
@@ -333,7 +350,7 @@ class LibraryManager:
                             pass
                     file_count += 1
         except Exception as e:
-            print(f"计算目录大小失败: {e}")
+            log.warning(f"计算目录大小失败: {e}")
             return "未知"
         
         mb_size = total_size / (1024 * 1024)

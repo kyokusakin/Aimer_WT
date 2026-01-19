@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 from datetime import datetime
+from logger import get_logger
+
+log = get_logger(__name__)
 
 def calculate_checksum(file_path, algorithm='sha256'):
     """计算文件的校验和"""
@@ -17,27 +20,27 @@ def calculate_checksum(file_path, algorithm='sha256'):
 
 def clean_build_artifacts():
     """清理构建临时文件"""
-    print("🧹 正在清理临时文件...")
+    log.info("🧹 正在清理临时文件...")
     
     # 删除 build 文件夹
     if os.path.exists('build'):
         try:
             shutil.rmtree('build')
-            print("   - 已删除 build 文件夹")
+            log.info("   - 已删除 build 文件夹")
         except Exception as e:
-            print(f"   ! 删除 build 文件夹失败: {e}")
+            log.warning(f"   ! 删除 build 文件夹失败: {e}")
 
     # 删除 spec 文件
     if os.path.exists('WT_Aimer_Voice.spec'):
         try:
             os.remove('WT_Aimer_Voice.spec')
-            print("   - 已删除 spec 文件")
+            log.info("   - 已删除 spec 文件")
         except Exception as e:
-            print(f"   ! 删除 spec 文件失败: {e}")
+            log.warning(f"   ! 删除 spec 文件失败: {e}")
 
 def build_exe():
     """执行打包任务"""
-    print("🚀 开始打包程序...")
+    log.info("🚀 开始打包程序...")
     
     # 确保 dist 目录存在 (PyInstaller 会自动创建，但为了保险)
     dist_dir = Path("dist")
@@ -65,32 +68,36 @@ def build_exe():
         # Strip symbols on Linux/Mac to reduce size
         cmd.append("--strip")
 
-    print(f"执行命令: {' '.join(cmd)}")
+    log.info(f"执行命令: {' '.join(cmd)}")
     
     try:
         # shell=False ensures arguments are passed correctly on Linux without manual escaping
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print(result.stdout)
-        print(result.stderr)
+        if result.stdout:
+            log.debug(result.stdout)
+        if result.stderr:
+            log.debug(result.stderr)
     except subprocess.CalledProcessError as e:
-        print(f"[X] 打包失败！错误: {e}")
-        print("--- PyInstaller stdout ---")
-        print(e.stdout)
-        print("--- PyInstaller stderr ---")
-        print(e.stderr)
+        log.error(f"[X] 打包失败！错误: {e}")
+        log.error("--- PyInstaller stdout ---")
+        if e.stdout:
+            log.error(e.stdout)
+        log.error("--- PyInstaller stderr ---")
+        if e.stderr:
+            log.error(e.stderr)
         import traceback
         traceback.print_exc()
         sys.exit(1)
     except Exception as e:
-        print(f"[X] 打包失败！错误: {e}")
+        log.exception(f"[X] 打包失败！错误: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
     else:
         exe_name = "WT_Aimer_Voice.exe" if os.name == 'nt' else "WT_Aimer_Voice"
         exe_path = Path("dist") / exe_name
-        print(f"[OK] 打包成功！")
-        print(f"输出文件: {exe_path}")
+        log.info("[OK] 打包成功！")
+        log.info(f"输出文件: {exe_path}")
         return True
     return False
 
@@ -105,10 +112,10 @@ def main():
     exe_path = Path("dist") / exe_name
     
     if not exe_path.exists():
-        print(f"❌ 未找到生成的 exe 文件！: {exe_path}")
+        log.error(f"❌ 未找到生成的 exe 文件！: {exe_path}")
         return
 
-    print("🔐 正在生成校验文件...")
+    log.info("🔐 正在生成校验文件...")
     checksum = calculate_checksum(exe_path, 'sha256')
     checksum_file = Path("dist/checksum.txt")
     
@@ -117,13 +124,13 @@ def main():
         f.write(f"SHA256: {checksum}\n")
         f.write(f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
-    print(f"✅ 校验文件已生成: {checksum_file}")
-    print(f"   SHA256: {checksum}")
+    log.info(f"✅ 校验文件已生成: {checksum_file}")
+    log.info(f"   SHA256: {checksum}")
 
     # 3. 清理临时文件
     clean_build_artifacts()
     
-    print("\n🎉 所有任务完成！可执行文件位于 dist 目录。")
+    log.info("\n🎉 所有任务完成！可执行文件位于 dist 目录。")
 
 if __name__ == "__main__":
     main()

@@ -11,11 +11,13 @@ from datetime import datetime
 
 # [P2 修复] 引入清单管理器
 from manifest_manager import ManifestManager
+from logger import get_logger
+
+log = get_logger(__name__)
 
 class CoreService:
     def __init__(self):
         self.game_root = None
-        self.logger_callback = None
         # ManifestManager 将在 validate_game_path 成功后初始化
         self.manifest_mgr = None
 
@@ -29,15 +31,21 @@ class CoreService:
         self.manifest_mgr = ManifestManager(self.game_root)
         return True, "校验通过"
 
-    def set_callbacks(self, log_cb):
-        self.logger_callback = log_cb
-
     def log(self, message, level="INFO"):
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        full_msg = f"[{timestamp}] [{level}] {message}"
-        print(full_msg)
-        if self.logger_callback:
-            self.logger_callback(full_msg)
+        tag = str(level or "INFO").upper()
+        msg = str(message)
+
+        # 统一前缀：避免重复叠加
+        if tag != "INFO" and not msg.startswith(f"[{tag}]"):
+            msg = f"[{tag}] {msg}"
+
+        if tag in {"WARN", "WARNING", "FAIL"}:
+            log.warning(msg)
+        elif tag in {"ERROR"}:
+            log.error(msg)
+        else:
+            # INFO / SUCCESS / SEARCH / FOUND / INSTALL / ... 都走 INFO
+            log.info(msg)
 
     def start_search_thread(self, callback):
         def run():

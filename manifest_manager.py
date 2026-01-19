@@ -8,6 +8,9 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime
+from logger import get_logger
+
+log = get_logger(__name__)
 
 class ManifestManager:
     """语音包安装清单管理器"""
@@ -36,7 +39,7 @@ class ManifestManager:
             with open(self.manifest_file, 'w', encoding='utf-8') as f:
                 json.dump(self.manifest, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"无法保存清单文件: {e}")
+            log.warning(f"无法保存清单文件: {e}")
     
     def check_conflicts(self, mod_name, files_to_install):
         """
