@@ -618,7 +618,7 @@ const app = {
         const safeNote = (mod.note || '暂无介绍').replace(/'/g, "\\'").replace(/"/g, '&quot;');
 
         // [核心逻辑] 判断是否是当前已加载的语音包
-        const isInstalled = (mod.id === app.installedModId);
+        const isInstalled = app.installedModIds && app.installedModIds.includes(mod.id);
 
         // 根据状态决定按钮样式和图标
         // 已安装: active 样式, check 图标, title="当前已加载"
@@ -765,13 +765,18 @@ const app = {
     // 安装/还原成功回调
     onInstallSuccess(modName) {
         console.log("Install Success:", modName);
-        this.installedModId = modName;
+        if (!this.installedModIds) {
+            this.installedModIds = [];
+        }
+        if (!this.installedModIds.includes(modName)) {
+            this.installedModIds.push(modName);
+        }
         if (this.modCache) this.renderList(this.modCache);
     },
 
     onRestoreSuccess() {
         console.log("Restore Success");
-        this.installedModId = null;
+        this.installedModIds = [];
         if (this.modCache) this.renderList(this.modCache);
     }
 };
@@ -1083,8 +1088,20 @@ app.init = async function () { // 覆盖之前的 init 实现以插入 checkDisc
         await app.checkDisclaimer();
 
         // 2. 获取初始状态
-        const state = await pywebview.api.init_app_state();
+        const state = await pywebview.api.init_app_state() || {
+            game_path: "",
+            path_valid: false,
+            active_theme: "default.json",
+            theme: "Light",
+            installed_mods: [],
+        };
         this.updatePathUI(state.game_path, state.path_valid);
+
+        if (state.installed_mods && Array.isArray(state.installed_mods)) {
+            this.installedModIds = state.installed_mods;
+        } else {
+            this.installedModIds = [];
+        }
 
         // 加载主题列表并应用上次的选择
         await this.loadThemeList();

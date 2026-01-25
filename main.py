@@ -148,7 +148,7 @@ class AppApi:
             "path_valid": is_valid,
             "theme": theme,
             "active_theme": self._cfg_mgr.get_active_theme(),
-            "current_mod": self._cfg_mgr.get_current_mod()  # 新增
+            "installed_mods": self._logic.get_installed_mods()  # 新增
         }
 
     def save_theme_selection(self, filename):
