@@ -219,6 +219,11 @@ const app = {
                 themeBtn.innerHTML = '<i class="ri-sun-line"></i>';
             }
 
+            // 加载配置路径信息
+            await this.loadConfigPathInfo();
+            // 加载语音包库路径信息
+            await this.loadLibraryPathInfo();
+
             // 绑定快捷键
             document.addEventListener('keydown', this.handleShortcuts.bind(this));
 
@@ -2263,6 +2268,18 @@ app.init = async function () { // 覆盖之前的 init 实现以插入 checkDisc
             }
         }
 
+        // 加载配置路径信息 / 语音包库路径信息（设置页显示用）
+        try {
+            await this.loadConfigPathInfo();
+        } catch (e) {
+            console.error('loadConfigPathInfo failed:', e);
+        }
+        try {
+            await this.loadLibraryPathInfo();
+        } catch (e) {
+            console.error('loadLibraryPathInfo failed:', e);
+        }
+
         // 绑定快捷键
         document.addEventListener('keydown', this.handleShortcuts.bind(this));
 
@@ -2474,4 +2491,314 @@ app.refreshSights = async function (opts) {
             refreshBtn.classList.remove('is-loading');
         }
     }
+};
+
+// --- 配置路径管理 ---
+app.loadConfigPathInfo = async function () {
+    const currentPathInput = document.getElementById('config-path-display');
+    const customPathInput = document.getElementById('custom-config-path-input');
+    
+    // 檢查 API 是否可用
+    if (!window.pywebview || !window.pywebview.api || typeof window.pywebview.api.get_config_path_info !== 'function') {
+        console.warn('loadConfigPathInfo: API not ready');
+        if (currentPathInput) currentPathInput.value = '等待后端连接...';
+        return;
+    }
+
+    try {
+        console.log('loadConfigPathInfo: calling API...');
+        const info = await pywebview.api.get_config_path_info();
+        console.log('loadConfigPathInfo: got info', info);
+        
+        if (currentPathInput) {
+            currentPathInput.value = (info && info.current_path) ? info.current_path : '未知';
+        }
+        if (customPathInput && info) {
+            customPathInput.value = info.custom_path || '';
+        }
+    } catch (e) {
+        console.error('加载配置路径信息失败:', e);
+        if (currentPathInput) currentPathInput.value = '加载失败: ' + (e.message || e);
+    }
+};
+
+app.openConfigFolder = async function () {
+    if (!window.pywebview?.api?.open_config_folder) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    try {
+        await pywebview.api.open_config_folder();
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '打开文件夹失败: ' + e.message, 'error');
+    }
+};
+
+app.browseConfigPath = async function () {
+    if (!window.pywebview?.api?.select_config_path) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    try {
+        const result = await pywebview.api.select_config_path();
+        if (result && result.success && result.path) {
+            // 保存隱藏的自定義路徑
+            const customPathInput = document.getElementById('custom-config-path-input');
+            if (customPathInput) {
+                customPathInput.value = result.path;
+            }
+            // 更新顯示的路徑（預覽）
+            const displayInput = document.getElementById('config-path-display');
+            if (displayInput) {
+                displayInput.value = result.path + ' (待保存)';
+            }
+        }
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '选择路径失败: ' + e.message, 'error');
+    }
+};
+
+app.saveCustomConfigPath = async function () {
+    if (!window.pywebview?.api?.save_custom_config_path) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    const customPathInput = document.getElementById('custom-config-path-input');
+    const path = customPathInput ? customPathInput.value.trim() : '';
+
+    try {
+        const result = await pywebview.api.save_custom_config_path(path);
+        if (result && result.success) {
+            this.showAlert('成功', '配置路径已保存，重启后生效', 'success');
+            // 重新加載顯示
+            await this.loadConfigPathInfo();
+        } else {
+            this.showAlert('错误', result.msg || '保存失败', 'error');
+        }
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '保存失败: ' + e.message, 'error');
+    }
+};
+
+// --- 語音包庫路徑管理 ---
+app.loadLibraryPathInfo = async function () {
+    const pendingInput = document.getElementById('pending-dir-input');
+    const libraryInput = document.getElementById('library-dir-input');
+    
+    // 檢查 API 是否可用
+    if (!window.pywebview || !window.pywebview.api || typeof window.pywebview.api.get_library_path_info !== 'function') {
+        console.warn('loadLibraryPathInfo: API not ready');
+        if (pendingInput) pendingInput.placeholder = '等待后端连接...';
+        if (libraryInput) libraryInput.placeholder = '等待后端连接...';
+        return;
+    }
+
+    try {
+        console.log('loadLibraryPathInfo: calling API...');
+        const info = await pywebview.api.get_library_path_info();
+        console.log('loadLibraryPathInfo: got info', info);
+        
+        if (pendingInput && info) {
+            if (info.custom_pending_dir) {
+                pendingInput.value = info.custom_pending_dir;
+            } else {
+                pendingInput.value = '';
+                pendingInput.placeholder = info.default_pending_dir || '留空则使用默认路径';
+            }
+        }
+        if (libraryInput && info) {
+            if (info.custom_library_dir) {
+                libraryInput.value = info.custom_library_dir;
+            } else {
+                libraryInput.value = '';
+                libraryInput.placeholder = info.default_library_dir || '留空则使用默认路径';
+            }
+        }
+    } catch (e) {
+        console.error('加载语音包库路径信息失败:', e);
+        if (pendingInput) pendingInput.placeholder = '加载失败';
+        if (libraryInput) libraryInput.placeholder = '加载失败';
+    }
+};
+
+app.browsePendingDir = async function () {
+    if (!window.pywebview?.api?.select_pending_dir) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    try {
+        const result = await pywebview.api.select_pending_dir();
+        if (result && result.success && result.path) {
+            const input = document.getElementById('pending-dir-input');
+            if (input) {
+                input.value = result.path;
+            }
+        }
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '选择路径失败: ' + e.message, 'error');
+    }
+};
+
+app.browseLibraryDir = async function () {
+    if (!window.pywebview?.api?.select_library_dir) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    try {
+        const result = await pywebview.api.select_library_dir();
+        if (result && result.success && result.path) {
+            const input = document.getElementById('library-dir-input');
+            if (input) {
+                input.value = result.path;
+            }
+        }
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '选择路径失败: ' + e.message, 'error');
+    }
+};
+
+app.openPendingFolder = async function () {
+    if (!window.pywebview?.api?.open_pending_folder) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    try {
+        await pywebview.api.open_pending_folder();
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '打开文件夹失败: ' + e.message, 'error');
+    }
+};
+
+app.openLibraryFolder = async function () {
+    if (!window.pywebview?.api?.open_library_folder) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    try {
+        await pywebview.api.open_library_folder();
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '打开文件夹失败: ' + e.message, 'error');
+    }
+};
+
+app.saveLibraryPaths = async function () {
+    if (!window.pywebview?.api?.save_library_paths) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    const pendingInput = document.getElementById('pending-dir-input');
+    const libraryInput = document.getElementById('library-dir-input');
+    const pendingDir = pendingInput ? pendingInput.value.trim() : null;
+    const libraryDir = libraryInput ? libraryInput.value.trim() : null;
+
+    try {
+        const result = await pywebview.api.save_library_paths(pendingDir, libraryDir);
+        if (result && result.success) {
+            this.showAlert('成功', '路径设置已保存', 'success');
+            // 重新加載路徑信息以更新 placeholder
+            await this.loadLibraryPathInfo();
+            // 刷新語音包庫列表
+            if (typeof this.refreshLibrary === 'function') {
+                this.refreshLibrary();
+            }
+        } else {
+            this.showAlert('错误', result.msg || '保存失败', 'error');
+        }
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '保存失败: ' + e.message, 'error');
+    }
+};
+
+app.resetLibraryPaths = async function () {
+    if (!window.pywebview?.api?.save_library_paths) {
+        this.showAlert('错误', '功能未就绪，请检查后端连接', 'error');
+        return;
+    }
+
+    // 確認重置
+    const confirmed = await this.showConfirmDialog(
+        '重置路径',
+        '确定要将待解压区和语音包库路径重置为默认值吗？'
+    );
+    if (!confirmed) return;
+
+    try {
+        // 傳入空字串以重置為預設
+        const result = await pywebview.api.save_library_paths('', '');
+        if (result && result.success) {
+            // 清空輸入框
+            const pendingInput = document.getElementById('pending-dir-input');
+            const libraryInput = document.getElementById('library-dir-input');
+            if (pendingInput) pendingInput.value = '';
+            if (libraryInput) libraryInput.value = '';
+            
+            this.showAlert('成功', '路径已重置为默认值', 'success');
+            // 重新加載以更新 placeholder
+            await this.loadLibraryPathInfo();
+            // 刷新語音包庫列表
+            if (typeof this.refreshLibrary === 'function') {
+                this.refreshLibrary();
+            }
+        } else {
+            this.showAlert('错误', result.msg || '重置失败', 'error');
+        }
+    } catch (e) {
+        console.error(e);
+        this.showAlert('错误', '重置失败: ' + e.message, 'error');
+    }
+};
+
+// 輔助方法：顯示確認對話框
+app.showConfirmDialog = function (title, message) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('modal-confirm');
+        const titleEl = document.getElementById('confirm-title');
+        const msgEl = document.getElementById('confirm-message');
+        const cancelBtn = document.getElementById('btn-confirm-cancel');
+        const okBtn = document.getElementById('btn-confirm-ok');
+        
+        if (!modal || !titleEl || !msgEl) {
+            resolve(false);
+            return;
+        }
+        
+        titleEl.textContent = title;
+        msgEl.innerHTML = message;
+        okBtn.innerHTML = '<i class="ri-check-line"></i> 确认';
+        okBtn.className = 'btn primary';
+        
+        const cleanup = () => {
+            modal.classList.remove('show');
+            cancelBtn.onclick = null;
+            okBtn.onclick = null;
+        };
+        
+        cancelBtn.onclick = () => {
+            cleanup();
+            resolve(false);
+        };
+        
+        okBtn.onclick = () => {
+            cleanup();
+            resolve(true);
+        };
+        
+        modal.classList.add('show');
+    });
 };

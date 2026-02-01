@@ -670,6 +670,89 @@
                     </div>
                 </div>
             </div>
+
+            <div class="card" id="config-path-card">
+                <div class="card-header">
+                    <h2>配置文件路径</h2>
+                    <span class="subtitle">Config File Location</span>
+                </div>
+                <div style="padding: 20px;">
+                    <label style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 8px;">
+                        配置文件存储位置 <span style="color: var(--status-warn);">(自定义路径需重启生效)</span>
+                    </label>
+                    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+                        <input type="text" id="config-path-display" class="form-input" readonly
+                            style="flex: 1; background: var(--bg-alt); cursor: default;" placeholder="加载中...">
+                        <button class="btn secondary" onclick="app.openConfigFolder()" title="打开配置文件夹">
+                            <i class="ri-folder-open-line"></i>
+                        </button>
+                        <button class="btn secondary" onclick="app.browseConfigPath()" title="选择自定义路径">
+                            <i class="ri-folder-add-line"></i>
+                        </button>
+                        <button class="btn primary" onclick="app.saveCustomConfigPath()" title="保存设置">
+                            <i class="ri-save-line"></i>
+                        </button>
+                    </div>
+                    <input type="hidden" id="custom-config-path-input">
+                    <p style="font-size: 11px; color: var(--text-sec); margin: 0;">
+                        <i class="ri-information-line"></i> 
+                        点击 <i class="ri-folder-add-line"></i> 选择自定义路径，或设置环境变量 <code style="background: var(--bg-alt); padding: 2px 6px; border-radius: 4px;">AIMER_WT_CONFIG_DIR</code>
+                    </p>
+                </div>
+            </div>
+
+            <!-- 語音包庫路徑設置 -->
+            <div class="card" id="library-path-card">
+                <div class="card-header">
+                    <h2>语音包库路径</h2>
+                    <span class="subtitle">Voice Pack Library Location</span>
+                </div>
+                <div style="padding: 20px;">
+                    <!-- 待解壓區 -->
+                    <label style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 8px;">
+                        待解压区路径 <span style="font-size: 11px; color: var(--text-sec);">(存放待导入的压缩包)</span>
+                    </label>
+                    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
+                        <input type="text" id="pending-dir-input" class="form-input"
+                            style="flex: 1;" placeholder="留空则使用默认路径">
+                        <button class="btn secondary" onclick="app.browsePendingDir()" title="选择文件夹">
+                            <i class="ri-folder-add-line"></i>
+                        </button>
+                        <button class="btn secondary" onclick="app.openPendingFolder()" title="打开文件夹">
+                            <i class="ri-folder-open-line"></i>
+                        </button>
+                    </div>
+
+                    <!-- 語音包庫 -->
+                    <label style="font-size: 12px; color: var(--text-sec); display: block; margin-bottom: 8px;">
+                        语音包库路径 <span style="font-size: 11px; color: var(--text-sec);">(存放已解压的语音包)</span>
+                    </label>
+                    <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
+                        <input type="text" id="library-dir-input" class="form-input"
+                            style="flex: 1;" placeholder="留空则使用默认路径">
+                        <button class="btn secondary" onclick="app.browseLibraryDir()" title="选择文件夹">
+                            <i class="ri-folder-add-line"></i>
+                        </button>
+                        <button class="btn secondary" onclick="app.openLibraryFolder()" title="打开文件夹">
+                            <i class="ri-folder-open-line"></i>
+                        </button>
+                    </div>
+
+                    <!-- 保存按鈕 -->
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <button class="btn primary" onclick="app.saveLibraryPaths()" style="flex: 1;">
+                            <i class="ri-save-line"></i> 保存路径设置
+                        </button>
+                        <button class="btn secondary" onclick="app.resetLibraryPaths()" title="重置为默认路径">
+                            <i class="ri-refresh-line"></i> 重置
+                        </button>
+                    </div>
+                    <p style="font-size: 11px; color: var(--text-sec); margin-top: 10px; margin-bottom: 0;">
+                        <i class="ri-information-line"></i> 
+                        更改路径后将立即生效，已存在的文件不会自动迁移
+                    </p>
+                </div>
+            </div>
         </div>
 
     </div>

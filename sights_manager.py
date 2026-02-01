@@ -29,72 +29,38 @@ import os
 import shutil
 import zipfile
 from pathlib import Path
+from logger import get_logger
+
+log = get_logger(__name__)
 
 
 class SightsManager:
-    """
-    功能定位:
-    - 面向 UserSights 目录的资源管理器，封装扫描、导入与文件操作能力。
-
-    输入输出:
-    - 输入: UserSights 路径、ZIP 文件路径、封面数据、回调函数等。
-    - 输出: 供前端渲染的数据结构与对文件系统的变更。
-    - 外部资源/依赖: UserSights 目录。
-
-    实现逻辑:
-    - 使用 _cache 缓存上次扫描结果；force_refresh 或资源变更时清空缓存。
-
-    业务关联:
-    - 上游: main.py 创建实例并调用。
-    - 下游: 影响前端炮镜页面展示与交互。
-    """
-    
+    # 面向 UserSights 目录的资源管理器，封装扫描、导入与文件操作能力。
     def __init__(self, log_callback=None):
-        """
-        功能定位:
-        - 初始化炮镜管理器并设置日志回调与缓存。
-
-        输入输出:
-        - 参数:
-          - log_callback: Callable[[str, str], None] | None，日志回调（message, level）。
-        - 返回: None
-        - 外部资源/依赖: 无
-
-        实现逻辑:
-        - 若未提供 log_callback，则使用空函数作为默认实现。
-        - 初始化用户路径与扫描缓存为 None。
-
-        业务关联:
-        - 上游: main.py 创建管理器实例。
-        - 下游: 扫描/导入过程会使用该回调输出日志（若提供）。
-        """
-        self._log = log_callback or (lambda *_: None)
+        # 保留 log_callback 以維持向後兼容，但內部使用統一 logger
+        self._log_callback = log_callback
         self._usersights_path = None
         self._cache = None
 
+    def _log(self, message, level="INFO"):
+        """統一日誌輸出到 logger.py"""
+        tag = str(level or "INFO").upper()
+        msg = str(message)
+
+        # 統一前綴：避免重複疊加
+        if tag != "INFO" and not msg.startswith(f"[{tag}]"):
+            msg = f"[{tag}] {msg}"
+
+        if tag in {"WARN", "WARNING"}:
+            log.warning(msg)
+        elif tag in {"ERROR"}:
+            log.error(msg)
+        else:
+            log.info(msg)
+
     
     def set_usersights_path(self, path: str | Path):
-        """
-        功能定位:
-        - 设置并校验 UserSights 工作目录路径。
-
-        输入输出:
-        - 参数:
-          - path: str | Path，UserSights 目录路径。
-        - 返回:
-          - bool，设置成功返回 True。
-        - 外部资源/依赖:
-          - 目录: path（不存在时创建）
-
-        实现逻辑:
-        - 1) 将参数转为 Path。
-        - 2) 若目录不存在则尝试创建。
-        - 3) 校验目标为目录，写入 _usersights_path 并清空缓存。
-
-        业务关联:
-        - 上游: 前端选择炮镜路径或启动时从配置恢复路径。
-        - 下游: scan_sights/import_sights_zip 等方法依赖该路径。
-        """
+        # 设置并校验 UserSights 工作目录路径。
         path = Path(path)
         if not path.exists():
             try:
@@ -111,54 +77,11 @@ class SightsManager:
         return True
     
     def get_usersights_path(self):
-        """
-        功能定位:
-        - 获取当前设置的 UserSights 目录路径。
-
-        输入输出:
-        - 参数: 无
-        - 返回:
-          - Path | None，当前 UserSights 路径；未设置时为 None。
-        - 外部资源/依赖: 无
-
-        实现逻辑:
-        - 直接返回 _usersights_path。
-
-        业务关联:
-        - 上游: main.py 初始化前端状态或调试输出时调用。
-        - 下游: 供其他逻辑判断路径是否可用。
-        """
+        # 获取当前设置的 UserSights 目录路径。
         return self._usersights_path
     
     def scan_sights(self, force_refresh=False, default_cover_path: Path | None = None):
-        """
-        功能定位:
-        - 扫描 UserSights 目录下的炮镜文件夹并生成前端展示用列表数据。
-
-        输入输出:
-        - 参数:
-          - force_refresh: bool，是否强制重新扫描（忽略缓存）。
-          - default_cover_path: Path | None，默认封面图片路径（未找到预览图时使用）。
-        - 返回:
-          - dict，包含：
-            - exists: bool，UserSights 是否存在且可访问
-            - path: str，UserSights 目录字符串
-            - items: list[dict]，每个条目包含 name/path/file_count/cover_url/cover_is_default
-        - 外部资源/依赖:
-          - 目录: UserSights（遍历）
-          - 文件: 目录内 .blk 文件（用于计数）、预览图（读取为 data URL）
-
-        实现逻辑:
-        - 1) 若路径未设置或不存在，返回 exists=False 的空结果。
-        - 2) 若命中缓存且路径未变化且仍存在，则直接返回缓存。
-        - 3) 遍历一级子目录作为炮镜条目，递归统计 .blk 文件数量。
-        - 4) 选择预览图或默认封面并转为 data URL。
-        - 5) 生成结果并写入缓存。
-
-        业务关联:
-        - 上游: 前端打开炮镜页或刷新列表时调用。
-        - 下游: 前端使用 items 渲染预览网格与统计信息。
-        """
+        # 扫描 UserSights 目录下的炮镜文件夹并生成前端展示用列表数据。
         if not self._usersights_path or not self._usersights_path.exists():
             return {'exists': False, 'path': '', 'items': []}
 
@@ -207,29 +130,7 @@ class SightsManager:
         return result
 
     def rename_sight(self, old_name: str, new_name: str):
-        """
-        功能定位:
-        - 在 UserSights 目录内安全重命名炮镜文件夹。
-
-        输入输出:
-        - 参数:
-          - old_name: str，原文件夹名。
-          - new_name: str，新文件夹名。
-        - 返回:
-          - bool，重命名成功返回 True。
-        - 外部资源/依赖:
-          - 目录: UserSights（读写）
-
-        实现逻辑:
-        - 1) 校验 UserSights 已设置且存在。
-        - 2) 校验源目录存在与新名称合法性（长度与非法字符）。
-        - 3) 校验目标目录不存在。
-        - 4) 执行重命名并清空缓存。
-
-        业务关联:
-        - 上游: 前端炮镜管理操作触发。
-        - 下游: 前端刷新列表后展示新名称。
-        """
+        # 在 UserSights 目录内安全重命名炮镜文件夹。
         import re
         usersights_dir = self._usersights_path
         if not usersights_dir or not usersights_dir.exists():
@@ -258,28 +159,7 @@ class SightsManager:
             raise OSError(f"重命名失败: {e}")
 
     def update_sight_cover_data(self, sight_name: str, data_url: str):
-        """
-        功能定位:
-        - 将前端传入的 base64 图片数据写入为 preview.png，作为炮镜封面。
-
-        输入输出:
-        - 参数:
-          - sight_name: str，炮镜文件夹名。
-          - data_url: str，形如 data:image/<type>;base64,<data> 的字符串。
-        - 返回:
-          - bool，成功返回 True。
-        - 外部资源/依赖:
-          - 文件: <UserSights>/<sight_name>/preview.png（写入）
-
-        实现逻辑:
-        - 1) 校验 UserSights 路径与目标目录存在。
-        - 2) 校验 data_url 格式并解码 base64。
-        - 3) 写入 preview.png 并清空缓存。
-
-        业务关联:
-        - 上游: 前端裁剪/上传封面后调用。
-        - 下游: 前端刷新列表后封面展示更新。
-        """
+        # 将前端传入的 base64 图片数据写入为 preview.png，作为炮镜封面。
         usersights_dir = self._usersights_path
         if not usersights_dir or not usersights_dir.exists():
             raise ValueError("UserSights 路径未设置或不存在")
@@ -308,24 +188,7 @@ class SightsManager:
             raise Exception(f"封面更新失败: {e}")
 
     def _find_preview_image(self, dir_path: Path):
-        """
-        功能定位:
-        - 在炮镜目录中查找可用的预览图文件。
-
-        输入输出:
-        - 参数:
-          - dir_path: Path，炮镜目录路径。
-        - 返回:
-          - Path | None，找到则返回图片路径，否则为 None。
-        - 外部资源/依赖: 文件系统 glob
-
-        实现逻辑:
-        - 按候选模式（preview/icon/常见图片扩展名）搜索并返回首个匹配文件。
-
-        业务关联:
-        - 上游: scan_sights。
-        - 下游: 用于生成 cover_url（data URL）。
-        """
+        # 在炮镜目录中查找可用的预览图文件。
         candidates = []
         for pat in ("preview.*", "icon.*", "*.jpg", "*.jpeg", "*.png", "*.webp"):
             candidates.extend(dir_path.glob(pat))
@@ -336,24 +199,7 @@ class SightsManager:
         return None
 
     def _to_data_url(self, file_path: Path):
-        """
-        功能定位:
-        - 将图片文件读取并编码为 data URL，供前端直接展示。
-
-        输入输出:
-        - 参数:
-          - file_path: Path，图片文件路径。
-        - 返回:
-          - str，data:image/<ext>;base64,<data>；读取失败返回空字符串。
-        - 外部资源/依赖: 文件系统读取、base64 编码
-
-        实现逻辑:
-        - 读取文件字节并 base64 编码，按扩展名推导 MIME 子类型。
-
-        业务关联:
-        - 上游: scan_sights。
-        - 下游: 前端直接将 cover_url 作为 img src 使用。
-        """
+        # 将图片文件读取并编码为 data URL，供前端直接展示。
         ext = file_path.suffix.lower().replace(".", "")
         if ext == "jpg":
             ext = "jpeg"
@@ -365,22 +211,7 @@ class SightsManager:
             return ""
     
     def open_usersights_folder(self):
-        """
-        功能定位:
-        - 打开当前设置的 UserSights 目录。
-
-        输入输出:
-        - 参数: 无
-        - 返回: None
-        - 外部资源/依赖: os.startfile（Windows）
-
-        实现逻辑:
-        - 若路径存在则调用 os.startfile 打开目录，否则抛出异常。
-
-        业务关联:
-        - 上游: 前端“打开 UserSights”按钮触发。
-        - 下游: 便于用户手动查看与管理文件结构。
-        """
+        # 打开当前设置的 UserSights 目录。
         if self._usersights_path and self._usersights_path.exists():
             try:
                 os.startfile(str(self._usersights_path))
@@ -395,34 +226,7 @@ class SightsManager:
         progress_callback=None,
         overwrite: bool = False,
     ):
-        """
-        功能定位:
-        - 将炮镜 ZIP 解压导入到 UserSights，并根据压缩包结构决定目标目录命名策略。
-
-        输入输出:
-        - 参数:
-          - zip_path: str | Path，炮镜 ZIP 文件路径（仅支持 .zip）。
-          - progress_callback: Callable[[int, str], None] | None，进度回调。
-          - overwrite: bool，目标目录已存在时是否覆盖。
-        - 返回:
-          - dict，包含 ok 与 target_dir（目标目录字符串）。
-        - 外部资源/依赖:
-          - 目录: UserSights（写入）
-          - 临时目录: <UserSights>/.__tmp_extract__<zip_stem>（写入并清理）
-
-        实现逻辑:
-        - 1) 校验 UserSights 已设置且存在，校验 zip_path 合法。
-        - 2) 在临时目录中逐文件解压成员，并限制成员扩展名不属于 blocked_ext。
-        - 3) 校验解压目标路径必须位于临时目录内部，避免生成临时目录外的文件。
-        - 4) 解压完成后统计临时目录顶层条目：
-           - 若只有一个顶层目录，则使用该目录名作为最终目标目录名。
-           - 否则使用 ZIP stem 作为最终目标目录名，并将顶层内容移动进去。
-        - 5) 清理临时目录并清空缓存。
-
-        业务关联:
-        - 上游: 前端“导入炮镜”触发并调用后端 API。
-        - 下游: 导入完成后前端刷新列表以展示新增炮镜。
-        """
+        # 将炮镜 ZIP 解压导入到 UserSights，并根据压缩包结构决定目标目录命名策略。
         if not self._usersights_path or not self._usersights_path.exists():
             raise ValueError("请先设置有效的 UserSights 路径")
 
@@ -452,25 +256,7 @@ class SightsManager:
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
         def _is_within(base_dir: Path, target: Path) -> bool:
-            """
-            功能定位:
-            - 判断目标路径是否位于指定基准目录内部（含目录自身）。
-
-            输入输出:
-            - 参数:
-              - base_dir: Path，基准目录。
-              - target: Path，目标路径。
-            - 返回:
-              - bool，位于基准目录内返回 True。
-            - 外部资源/依赖: 路径解析
-
-            实现逻辑:
-            - resolve 后比较前缀关系。
-
-            业务关联:
-            - 上游: import_sights_zip 解压成员写入前调用。
-            - 下游: 限制临时解压写入范围。
-            """
+            # 判断目标路径是否位于指定基准目录内部（含目录自身）。
             try:
                 base = base_dir.resolve()
                 t = target.resolve()

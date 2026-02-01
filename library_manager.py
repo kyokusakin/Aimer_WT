@@ -1,34 +1,10 @@
 # -*- coding: utf-8 -*-
-"""
-语音包库管理模块：负责语音包库目录结构、压缩包导入解压、元数据读取与标签推断。
-
-功能定位:
-- 管理两个工作目录：待解压区与语音包库。
-- 将用户提供的 ZIP/RAR 导入并解压为语音包文件夹。
-- 读取语音包元数据（info.json 及兼容形态），生成前端展示所需的数据结构。
-- 基于 .bank 文件名规则推断语音包能力标签与可安装文件夹列表。
-
-输入输出:
-- 输入: 压缩包路径、语音包名称、回调函数、密码提供器、目标国家缩写等。
-- 输出: 语音包列表、语音包详情字典、导入结果（通过目录与文件落盘体现）、日志回调输出。
-- 外部资源/依赖:
-  - 目录: WT待解压区、WT语音包库（均位于 APP_ROOT 下）
-  - 文件: 语音包目录下的 info.json/cover.* 与各类 .bank 文件
-  - 系统能力: 7-Zip 可执行文件（用于 rar 与部分 zip 解压）、文件系统读写、os.startfile
-
-实现逻辑:
-- 1) 初始化时计算 APP_ROOT，并确保待解压区与语音包库目录存在。
-- 2) 导入时为每个压缩包创建目标目录并解压；若遇到加密压缩包，则通过 password_provider 获取密码重试。
-- 3) 读取详情时合并作者元数据与基于文件规则推断的标签，并计算大小、封面与可安装文件夹列表。
-
-业务关联:
-- 上游: main.py 的桥接层调用该模块完成导入/扫描/详情读取。
-- 下游: 输出的语音包详情被前端用于渲染语音包卡片、安装选择与标签展示。
-"""
+#语音包库管理模块：负责语音包库目录结构、压缩包导入解压、元数据读取与标签推断。
 import os
 import sys
 import shutil
 import subprocess
+import time
 import zipfile
 import json
 import re
@@ -36,7 +12,7 @@ import platform
 import subprocess
 from collections import Counter
 from pathlib import Path
-from logger import get_logger
+from logger import get_logger, get_app_data_dir
 
 log = get_logger(__name__)
 
@@ -44,61 +20,94 @@ log = get_logger(__name__)
 DIR_PENDING = "WT待解压区"
 DIR_LIBRARY = "WT语音包库"
 
+
+# 定義密碼相關異常類
+class ArchivePasswordRequired(Exception):
+    """壓縮包需要密碼"""
+    pass
+
+
+class ArchivePasswordIncorrect(Exception):
+    """密碼錯誤"""
+    pass
+
+
+class ArchivePasswordCanceled(Exception):
+    """用戶取消輸入密碼"""
+    pass
+
+
 class LibraryManager:
-    def __init__(self):
-        # 使用用户文档文件夹 Aimer_WT 作为根目录
-        """
-        功能定位:
-        - 初始化语音包库管理器，确定工作目录并确保必要目录存在。
-
-        输入输出:
-        - 参数:
-          - log_callback: Callable[[str, str], None]，日志回调（message, level）。
-        - 返回: None
-        - 外部资源/依赖:
-          - 目录: WT待解压区、WT语音包库（创建）
-
-        实现逻辑:
-        - 1) 选择 root_dir（frozen: sys.executable 同级；非 frozen: 源码目录）。
-        - 2) 拼接 pending_dir 与 library_dir。
-        - 3) 调用 _ensure_dirs 创建目录。
-
-        业务关联:
-        - 上游: main.py 在启动时创建。
-        - 下游: 导入、扫描、详情读取等方法依赖 pending_dir 与 library_dir。
-        """
-        self.root_dir = Path.home() / "Documents" / "Aimer_WT"
+    def __init__(self, log_callback=None, pending_dir=None, library_dir=None):
+        # 保留 log_callback 以維持向後兼容，但內部使用統一 logger
+        self._log_callback = log_callback
         
-        # 也可以保留原逻辑作为备份，或者直接覆盖
-        # if getattr(sys, 'frozen', False):
-        #     application_path = Path(sys.executable).parent
-        # else:
-        #     application_path = Path(__file__).parent
-            
-        self.pending_dir = self.root_dir / DIR_PENDING
-        self.library_dir = self.root_dir / DIR_LIBRARY
+        # 使用 logger.py 中定義的統一資料目錄 (Documents/Aimer_WT)
+        self.root_dir = get_app_data_dir()
         
+        # 初始化待解壓區與語音包庫目錄路徑
+        # 支援自定義路徑，若未提供則使用預設值
+        if pending_dir and Path(pending_dir).exists():
+            self.pending_dir = Path(pending_dir)
+        else:
+            self.pending_dir = self.root_dir / DIR_PENDING
+        
+        if library_dir and Path(library_dir).exists():
+            self.library_dir = Path(library_dir)
+        else:
+            self.library_dir = self.root_dir / DIR_LIBRARY
+        
+        # 確保目錄存在
         self._ensure_dirs()
 
+    def update_paths(self, pending_dir=None, library_dir=None):
+        """
+        動態更新待解壓區和語音包庫路徑。
+        返回: dict 包含更新結果 { 'pending_updated': bool, 'library_updated': bool }
+        """
+        result = {'pending_updated': False, 'library_updated': False}
+        
+        if pending_dir:
+            new_path = Path(pending_dir)
+            # 確保目錄存在或可創建
+            if not new_path.exists():
+                try:
+                    new_path.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    log.error(f"無法創建待解壓區目錄: {e}")
+                    return result
+            self.pending_dir = new_path
+            result['pending_updated'] = True
+            log.info(f"待解壓區路徑已更新: {new_path}")
+        
+        if library_dir:
+            new_path = Path(library_dir)
+            # 確保目錄存在或可創建
+            if not new_path.exists():
+                try:
+                    new_path.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    log.error(f"無法創建語音包庫目錄: {e}")
+                    return result
+            self.library_dir = new_path
+            result['library_updated'] = True
+            log.info(f"語音包庫路徑已更新: {new_path}")
+        
+        return result
+
+    def get_current_paths(self):
+        """
+        返回當前的待解壓區和語音包庫路徑。
+        """
+        return {
+            'pending_dir': str(self.pending_dir),
+            'library_dir': str(self.library_dir),
+            'default_pending_dir': str(self.root_dir / DIR_PENDING),
+            'default_library_dir': str(self.root_dir / DIR_LIBRARY)
+        }
+
     def _load_json_with_fallback(self, file_path):
-        """
-        功能定位:
-        - 按编码回退策略读取 JSON 文件并解析为 Python 对象。
-
-        输入输出:
-        - 参数:
-          - file_path: str | Path，目标文件路径。
-        - 返回:
-          - dict | list | None，解析成功返回对象，失败返回 None。
-        - 外部资源/依赖: 文件 file_path（读取）
-
-        实现逻辑:
-        - 依次尝试 encodings 列表中的编码读取并 json.load。
-
-        业务关联:
-        - 上游: get_mod_details。
-        - 下游: 为元数据读取提供编码兼容。
-        """
+        # 按编码回退策略读取 JSON 文件并解析为 Python 对象。
         encodings = ["utf-8-sig", "utf-8", "cp950", "big5", "gbk"]
         for enc in encodings:
             try:
@@ -109,22 +118,7 @@ class LibraryManager:
         return None
 
     def _ensure_dirs(self):
-        """
-        功能定位:
-        - 确保待解压区与语音包库目录存在。
-
-        输入输出:
-        - 参数: 无
-        - 返回: None
-        - 外部资源/依赖: 文件系统（目录创建）
-
-        实现逻辑:
-        - 若目录不存在则创建，不做递归扫描或清理。
-
-        业务关联:
-        - 上游: __init__。
-        - 下游: scan_pending/scan_library/unzip_* 等方法依赖目录存在。
-        """
+        # 确保待解压区与语音包库目录存在。
         if not self.pending_dir.exists():
             self.pending_dir.mkdir(parents=True)
         if not self.library_dir.exists():
@@ -160,60 +154,15 @@ class LibraryManager:
             self.log(f"无法打开文件夹: {e}", "ERROR")
 
     def open_pending_folder(self):
-        """
-        功能定位:
-        - 打开待解压区目录，供用户手动放入压缩包。
-
-        输入输出:
-        - 参数: 无
-        - 返回: None
-        - 外部资源/依赖: os.startfile（Windows）
-
-        实现逻辑:
-        - 调用 os.startfile 打开 pending_dir。
-
-        业务关联:
-        - 上游: 前端“打开待解压区”操作。
-        - 下游: 用户在该目录放入 ZIP/RAR 后可触发导入流程。
-        """
+        # 打开待解压区目录，供用户手动放入压缩包。
         self._open_folder_cross_platform(self.pending_dir)
 
     def open_library_folder(self):
-        """
-        功能定位:
-        - 打开语音包库目录，供用户查看已导入的语音包文件夹。
-
-        输入输出:
-        - 参数: 无
-        - 返回: None
-        - 外部资源/依赖: os.startfile（Windows）
-
-        实现逻辑:
-        - 调用 os.startfile 打开 library_dir。
-
-        业务关联:
-        - 上游: 前端“打开语音包库”操作。
-        - 下游: 用户可查看/手动管理语音包目录结构。
-        """
+        # 打开语音包库目录，供用户查看已导入的语音包文件夹。
         self._open_folder_cross_platform(self.library_dir)
 
     def scan_library(self):
-        """
-        功能定位:
-        - 扫描语音包库目录下的语音包文件夹列表。
-
-        输入输出:
-        - 参数: 无
-        - 返回: list[str]，语音包文件夹名列表。
-        - 外部资源/依赖: self.library_dir（目录遍历）
-
-        实现逻辑:
-        - 遍历 library_dir 下的一级子项，收集其中的目录名称。
-
-        业务关联:
-        - 上游: main.py 获取语音包库列表时调用。
-        - 下游: 前端根据返回值进一步读取每个语音包的详情并渲染列表。
-        """
+        # 扫描语音包库目录下的语音包文件夹列表。
         mods = []
         if self.library_dir.exists():
             for item in self.library_dir.iterdir():
@@ -222,22 +171,7 @@ class LibraryManager:
         return mods
 
     def scan_pending(self):
-        """
-        功能定位:
-        - 扫描待解压区中的 ZIP/RAR 文件列表。
-
-        输入输出:
-        - 参数: 无
-        - 返回: list[Path]，待处理压缩文件路径列表。
-        - 外部资源/依赖: self.pending_dir（目录遍历）
-
-        实现逻辑:
-        - 遍历 pending_dir 下的一级子项，筛选扩展名为 .zip 或 .rar 的文件。
-
-        业务关联:
-        - 上游: unzip_zips_to_library 调用以获取待导入文件清单。
-        - 下游: 作为批量导入的输入。
-        """
+        # 扫描待解压区中的 ZIP/RAR 文件列表。
         archives = []
         if self.pending_dir.exists():
             for item in self.pending_dir.iterdir():
@@ -246,26 +180,7 @@ class LibraryManager:
         return archives
 
     def _normalize_wtlive_compat_files(self, mod_dir: Path):
-        """
-        功能定位:
-        - 规范化语音包目录中的元数据与封面文件命名，生成工具可直接读取的 info.json 与 cover.png。
-
-        输入输出:
-        - 参数:
-          - mod_dir: Path，语音包目录路径。
-        - 返回: None
-        - 外部资源/依赖:
-          - 文件: <mod_dir>/info.json、<mod_dir>/cover.png（创建/移动）
-          - 候选来源: info.bank、*AimerWT*.bank、cover.bank（位于根目录或 info 子目录）
-
-        实现逻辑:
-        - 1) 若 info.json 不存在，按候选列表查找可用 .bank 文件并移动为 info.json。
-        - 2) 若 cover.(png/jpg/jpeg) 不存在，查找 cover.bank 并移动为 cover.png。
-
-        业务关联:
-        - 上游: 解压导入完成后调用；get_mod_details 读取元数据前调用。
-        - 下游: 保证前端展示字段（标题/作者/封面等）可被统一读取。
-        """
+        # 规范化语音包目录中的元数据与封面文件命名，生成工具可直接读取的 info.json 与 cover.png。
         try:
             mod_dir = Path(mod_dir)
             if not mod_dir.exists() or not mod_dir.is_dir():
@@ -338,30 +253,7 @@ class LibraryManager:
             return
 
     def get_mod_details(self, mod_name):
-        """
-        功能定位:
-        - 读取语音包的元数据与资源信息，生成前端展示所需的详情字典。
-
-        输入输出:
-        - 参数:
-          - mod_name: str，语音包目录名（位于 self.library_dir 下）。
-        - 返回:
-          - dict，语音包详情；包含标题/作者/版本/日期/链接/标签/语言/大小/封面路径/能力映射/可安装文件夹列表等字段。
-        - 外部资源/依赖:
-          - 目录: <library_dir>/<mod_name>
-          - 文件: info.json（及兼容形态）、cover.*、目录下的 .bank 文件
-
-        实现逻辑:
-        - 1) 对语音包目录执行命名规范化（info.json、cover.png）。
-        - 2) 构造默认详情结构，并按候选优先级读取元数据文件覆盖默认值。
-        - 3) 基于文件名规则推断 tags，并与作者 tags 合并去重；语言字段仅来自作者元数据，缺失则标记为“未识别”。
-        - 4) 将 tags 映射为 capabilities，计算目录大小，扫描封面与可安装文件夹列表。
-
-        业务关联:
-        - 上游: main.py 获取语音包列表时逐项调用。
-        - 下游: 前端使用返回字段渲染卡片、标签与安装选择界面。
-        """
-        import time
+        # 读取语音包的元数据与资源信息，生成前端展示所需的详情字典。
         mod_dir = self.library_dir / mod_name
         info_file = mod_dir / "info.json"
         self._normalize_wtlive_compat_files(mod_dir)
@@ -406,7 +298,7 @@ class LibraryManager:
                 info_candidates.extend(list((mod_dir / "info").glob("*（AimerWT）.bank")))
                 info_candidates.extend(list((mod_dir / "info").glob("*(AimerWT).bank")))
         except Exception as e:
-            print(f"Glob 搜索出错: {e}")
+            log.error(f"Glob 搜索出错: {e}")
 
         found_info_file = None
         for cand in info_candidates:
@@ -435,7 +327,7 @@ class LibraryManager:
                         if key in data:
                             details[key] = data[key]
                 else:
-                    print(f"读取 info 文件失败 ({found_info_file.name})")
+                    log.warning(f"读取 info 文件失败 ({found_info_file.name})")
             except Exception as e:
                 log.warning(f"读取 info.json 失败: {e}")
 
@@ -485,9 +377,9 @@ class LibraryManager:
                 new_path = bank_path.with_suffix(".png")
                 try:
                     bank_path.rename(new_path)
-                    print(f"[AutoFix] 已将 {bank_path.name} 恢复为 {new_path.name}")
+                    log.info(f"[AutoFix] 已将 {bank_path.name} 恢复为 {new_path.name}")
                 except Exception as e:
-                    print(f"重命名封面失败: {e}")
+                    log.warning(f"重命名封面失败: {e}")
 
         # 扫描封面 (支持根目录和 info 子目录)
         search_dirs = [mod_dir, mod_dir / "info"]
@@ -525,32 +417,7 @@ class LibraryManager:
         return details
 
     def _detect_smart_tags(self, mod_dir):
-        """
-        功能定位:
-        - 基于语音包目录内 .bank 文件的命名规则推断功能标签（tags）。
-
-        输入输出:
-        - 参数:
-          - mod_dir: Path，语音包目录路径。
-        - 返回:
-          - list[str]，推断得到的标签列表（去重后转为列表）。
-        - 外部资源/依赖:
-          - 文件: <mod_dir>/**/*.bank（目录递归扫描）
-
-        实现逻辑:
-        - 1) 遍历 mod_dir 下的所有 .bank 文件并统一为小写文件名。
-        - 2) 按规则匹配文件名并加入对应标签：
-           - 陆战: _crew_dialogs_ground_<code>.assets.bank 或 crew_dialogs_ground.assets.bank
-           - 无线电/局势: _crew_dialogs_common_<code>.assets.bank 或 crew_dialogs_common.assets.bank
-           - 空战: aircraft_gui.assets.bank（仅此文件名触发）
-           - 导弹音效: aircraft_common.assets.bank / aircraft_effects.assets.bank / aircraft_guns.assets.bank / aircraft_guns.bank
-           - 音乐包: 文件名包含 aircraft_music
-           - 其他: 依据固定名单标记 noise/pilot 等标签
-
-        业务关联:
-        - 上游: get_mod_details 在作者 tags 缺失或不完整时调用以补充展示标签。
-        - 下游: tags 映射为 capabilities，影响前端卡片图标与筛选展示。
-        """
+        # 基于语音包目录内 .bank 文件的命名规则推断功能标签（tags）。
         detected_tags = set()
         
         try:
@@ -737,49 +604,11 @@ class LibraryManager:
         return f"{int(mb_size)} MB"
 
     def _detect_mod_capabilities(self, mod_dir):
-        """
-        功能定位:
-        - 兼容旧版接口签名的占位实现。
-
-        输入输出:
-        - 参数:
-          - mod_dir: Path，语音包目录路径（未使用）。
-        - 返回:
-          - dict，空字典。
-        - 外部资源/依赖: 无
-
-        实现逻辑:
-        - 返回空结构以保持调用方兼容。
-
-        业务关联:
-        - 上游: 可能存在的旧调用路径。
-        - 下游: 不参与当前能力推断逻辑。
-        """
+        # 兼容旧版接口签名的占位实现。
         return {}
 
     def _is_safe_path(self, path, base_dir):
-        """
-        功能定位:
-        - 校验路径是否位于指定基准目录内，用于限制删除/移动等文件操作的作用范围。
-
-        输入输出:
-        - 参数:
-          - path: str | Path，目标路径。
-          - base_dir: str | Path，允许操作的基准目录。
-        - 返回:
-          - bool，位于基准目录内且不命中受保护目录时返回 True。
-        - 外部资源/依赖: 文件系统路径解析
-
-        实现逻辑:
-        - 1) resolve 得到绝对路径并统一为字符串。
-        - 2) 对部分受保护路径进行直接拒绝（如系统目录与根目录）。
-        - 3) 若目标位于 C: 盘，要求必须位于 base_dir 内。
-        - 4) 对所有盘符执行“是否以 base_dir 为前缀”的包含关系判断。
-
-        业务关联:
-        - 上游: 用于文件操作前的边界校验。
-        - 下游: 降低对非预期目录执行删除/覆盖的风险。
-        """
+        # 校验路径是否位于指定基准目录内，用于限制删除/移动等文件操作的作用范围。
         try:
             abs_path = Path(path).resolve()
             abs_base = Path(base_dir).resolve()
@@ -999,28 +828,7 @@ class LibraryManager:
             raise
 
     def unzip_zips_to_library(self, progress_callback=None, password_provider=None):
-        """
-        功能定位:
-        - 批量导入待解压区中的 ZIP/RAR 文件到语音包库，并通过回调输出总体进度。
-
-        输入输出:
-        - 参数:
-          - progress_callback: Callable[[int, str], None] | None，总体进度回调。
-          - password_provider: Callable[[Path, str], str | None] | None，密码提供器。
-        - 返回: None
-        - 外部资源/依赖:
-          - 目录: self.pending_dir（读取压缩包列表）、self.library_dir（写入解压结果）
-
-        实现逻辑:
-        - 1) scan_pending 获取待处理压缩包列表；为空则直接返回。
-        - 2) 对每个压缩包计算其进度区间（base_progress/share_progress）。
-        - 3) 若目标目录已存在则记录为跳过；否则创建目录并解压导入。
-        - 4) 对每个成功导入的语音包执行命名规范化。
-
-        业务关联:
-        - 上游: main.py 的“批量导入”流程。
-        - 下游: 导入完成后前端刷新语音包库列表以展示新内容。
-        """
+        # 批量导入待解压区中的 ZIP/RAR 文件到语音包库，并通过回调输出总体进度。
         zips = self.scan_pending()
         if not zips:
             self.log("待解压区没有 ZIP/RAR 文件。", "WARN")
@@ -1082,34 +890,7 @@ class LibraryManager:
         if progress_callback: progress_callback(100, "全部完成")
 
     def _extract_zip_safely(self, zip_path, target_dir, progress_callback=None, base_progress=0, share_progress=100, password=None):
-        """
-        功能定位:
-        - 解压 ZIP 文件到目标目录，并提供进度回调与路径边界校验。
-
-        输入输出:
-        - 参数:
-          - zip_path: Path，ZIP 文件路径。
-          - target_dir: Path，目标解压目录。
-          - progress_callback: Callable[[int, str], None] | None，进度回调。
-          - base_progress: float|int，该 ZIP 在总体进度中的起始百分比。
-          - share_progress: float|int，该 ZIP 在总体进度中的占比。
-          - password: str | None，ZIP 密码（若需要）。
-        - 返回: None
-        - 外部资源/依赖:
-          - 文件系统: 创建目录并写入解压文件
-          - zipfile: 读取 ZIP 成员并按块写入
-
-        实现逻辑:
-        - 1) 读取成员列表并计算总文件数/总字节数（用于进度估算）。
-        - 2) 逐成员解码文件名并过滤无效项（如 __MACOSX、desktop.ini）。
-        - 3) 将目标路径 resolve 后校验必须位于 target_root 内，否则跳过该成员。
-        - 4) 对文件成员按块写入，同时更新 extracted_bytes 并节流更新进度。
-
-        业务关联:
-        - 上游: _extract_archive_with_password 在处理 .zip 时调用。
-        - 下游: 生成语音包库目录结构，供后续扫描与元数据读取。
-        """
-        import time
+        # 解压 ZIP 文件到目标目录，并提供进度回调与路径边界校验。
         target_root = Path(target_dir).resolve()
         with zipfile.ZipFile(zip_path, 'r') as zf:
             file_list = zf.infolist()
@@ -1220,36 +1001,7 @@ class LibraryManager:
                 progress_callback(int(base_progress + share_progress), "解压完成")
 
     def copy_country_files(self, mod_name, game_path, country_code, include_ground=True, include_radio=True):
-        """
-        功能定位:
-        - 从语音包库中复制“陆战/无线电”国籍语音文件到游戏 sound/mod，并将文件名中的国家缩写替换为目标缩写。
-
-        输入输出:
-        - 参数:
-          - mod_name: str，语音包目录名（位于 self.library_dir 下）。
-          - game_path: str | Path，游戏根目录路径。
-          - country_code: str，目标国家缩写（2-10 位小写字母，且不允许为 zh）。
-          - include_ground: bool，是否复制陆战相关文件对。
-          - include_radio: bool，是否复制无线电/局势相关文件对。
-        - 返回:
-          - dict，包含 created/skipped/missing 三个列表：
-            - created: 本次新创建的目标文件名
-            - skipped: 已存在而跳过的目标文件名
-            - missing: 未在语音包中找到的来源模式描述（如 _crew_dialogs_ground_*.assets.bank）
-        - 外部资源/依赖:
-          - 目录: <game_root>/sound/mod（写入）
-          - 目录: <library_dir>/<mod_name>（读取）
-
-        实现逻辑:
-        - 1) 校验 country_code 格式与 game_path、mod_dir 的存在性。
-        - 2) 在 mod_dir 中按正则匹配查找 source 文件（允许可选国家后缀）。
-        - 3) 将 source 复制到 game_mod_dir，并按 prefix + country_code 生成目标文件名。
-        - 4) 对已存在目标文件记录为 skipped；对未找到来源文件记录为 missing。
-
-        业务关联:
-        - 上游: main.py 暴露给前端的“复制国籍文件”功能入口。
-        - 下游: 生成的新文件将影响游戏加载的语音资源集合。
-        """
+        # 从语音包库中复制“陆战/无线电”国籍语音文件到游戏 sound/mod，并将文件名中的国家缩写替换为目标缩写。
         code = str(country_code or "").strip().lower()
         if not code or not re.match(r"^[a-z]{2,10}$", code):
             raise ValueError("国家缩写不合法")

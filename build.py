@@ -78,20 +78,16 @@ def build_exe():
         if result.stderr:
             log.debug(result.stderr)
     except subprocess.CalledProcessError as e:
-        log.error(f"[X] 打包失败！错误: {e}")
+        log.error(f"[X] 打包失败！错误: {e}", exc_info=True)
         log.error("--- PyInstaller stdout ---")
         if e.stdout:
             log.error(e.stdout)
         log.error("--- PyInstaller stderr ---")
         if e.stderr:
             log.error(e.stderr)
-        import traceback
-        traceback.print_exc()
         sys.exit(1)
     except Exception as e:
         log.exception(f"[X] 打包失败！错误: {e}")
-        import traceback
-        traceback.print_exc()
         sys.exit(1)
     else:
         exe_name = "WT_Aimer_Voice.exe" if os.name == 'nt' else "WT_Aimer_Voice"
