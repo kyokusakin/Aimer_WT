@@ -154,11 +154,6 @@ const app = {
     },
 
     async onThemeChange(filename) {
-        if (filename === 'default.json') {
-            this.resetTheme();
-            pywebview.api.save_theme_selection("default.json");
-            return;
-        }
         const themeData = await pywebview.api.load_theme_content(filename);
         if (themeData && (themeData.colors || themeData.light || themeData.dark)) {
             this.applyThemeData(themeData);
@@ -166,7 +161,13 @@ const app = {
         } else {
             app.showAlert("错误", "主题文件损坏或格式错误！");
             document.getElementById('theme-select').value = "default.json";
-            this.resetTheme();
+            // 嘗試載入預設主題
+            const defaultTheme = await pywebview.api.load_theme_content("default.json");
+            if (defaultTheme) {
+                this.applyThemeData(defaultTheme);
+            } else {
+                this.resetTheme();
+            }
         }
     },
 
@@ -199,15 +200,14 @@ const app = {
 
             // 加载主题列表并应用上次的选择
             await this.loadThemeList();
-            if (state.active_theme && state.active_theme !== 'default.json') {
-                const select = document.getElementById('theme-select');
-                if (select) select.value = state.active_theme;
+            const activeTheme = state.active_theme || 'default.json';
+            const select = document.getElementById('theme-select');
+            if (select) select.value = activeTheme;
 
-                // 加载内容
-                const themeData = await pywebview.api.load_theme_content(state.active_theme);
-                if (themeData && themeData.colors) {
-                    this.applyTheme(themeData.colors);
-                }
+            // 加载主题内容（包括 default.json）
+            const themeData = await pywebview.api.load_theme_content(activeTheme);
+            if (themeData && (themeData.colors || themeData.light || themeData.dark)) {
+                this.applyThemeData(themeData);
             }
 
             const themeBtn = document.getElementById('btn-theme');
@@ -2256,14 +2256,14 @@ app.init = async function () { // 覆盖之前的 init 实现以插入 checkDisc
 
         // 加载主题列表并应用上次的选择
         await this.loadThemeList();
-        if (state.active_theme && state.active_theme !== 'default.json') {
-            const select = document.getElementById('theme-select');
-            if (select) select.value = state.active_theme;
+        const activeTheme = state.active_theme || 'default.json';
+        const select = document.getElementById('theme-select');
+        if (select) select.value = activeTheme;
 
-            const themeData = await pywebview.api.load_theme_content(state.active_theme);
-            if (themeData && (themeData.colors || themeData.light || themeData.dark)) {
-                this.applyThemeData(themeData);
-            }
+        // 加载主题内容（包括 default.json）
+        const themeData = await pywebview.api.load_theme_content(activeTheme);
+        if (themeData && (themeData.colors || themeData.light || themeData.dark)) {
+            this.applyThemeData(themeData);
         }
 
         // 加载语音包库路径信息（设置页显示用）
