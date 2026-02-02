@@ -10,7 +10,11 @@ import threading
 import time
 import platform
 import subprocess
-import webview
+try:
+    import webview
+except Exception as _e:
+    webview = None
+    _WEBVIEW_IMPORT_ERROR = _e
 
 from pathlib import Path
 from config_manager import ConfigManager
@@ -30,6 +34,64 @@ else:
 WEB_DIR = BASE_DIR / "web"
 
 log = get_logger(__name__)
+
+
+def _show_fatal_error(title: str, message: str) -> None:
+    """顯示致命錯誤（盡量用系統對話框，失敗則退回 stderr）。"""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, str(message), str(title), 0x10)
+            return
+    except Exception:
+        pass
+
+    try:
+        sys.stderr.write(f"{title}: {message}\n")
+    except Exception:
+        pass
+
+
+def _install_global_exception_handlers() -> None:
+    """將未捕捉例外統一寫入 app.log，避免只有 console 報錯。"""
+
+    def _excepthook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+
+        try:
+            fatal_log = get_logger("fatal")
+            fatal_log.critical("未捕捉例外", exc_info=(exc_type, exc, tb))
+        except Exception:
+            pass
+
+        _show_fatal_error(
+            "Aimer WT 發生錯誤",
+            f"程式遇到未處理的錯誤而終止。\n\n"
+            f"{exc_type.__name__}: {exc}\n\n"
+            f"詳細資訊請查看 logs/app.log",
+        )
+
+    sys.excepthook = _excepthook
+
+    # Python 3.8+：捕捉 thread 未處理例外
+    if hasattr(threading, "excepthook"):
+
+        def _thread_excepthook(args):
+            try:
+                th_log = get_logger("thread")
+                th_log.critical(
+                    "背景執行緒未捕捉例外: %s (%s)",
+                    getattr(args.thread, "name", "<unknown>"),
+                    getattr(args.thread, "ident", "?"),
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+                )
+            except Exception:
+                pass
+
+        threading.excepthook = _thread_excepthook
 
 class AppApi:
     # 提供前端可调用的后端 API 集合，并协调配置、库管理、安装与资源管理等模块。
@@ -1223,7 +1285,7 @@ def on_app_started():
         except ImportError:
             pass
 
-    for _ in range(10):
+    for i in range(10):
         try:
             if webview.windows:
                 win = webview.windows[0]
@@ -1236,51 +1298,138 @@ def on_app_started():
                 log.info(f"[UI_STATE] {state}")
                 break
         except Exception:
+            # 啟動初期 UI 尚未就緒很常見：僅在最後一次嘗試記錄詳細原因
+            if i == 9:
+                log.debug("on_app_started: UI 尚未就緒", exc_info=True)
             time.sleep(0.2)
 
 
-if __name__ == "__main__":
+def main() -> int:
+    _install_global_exception_handlers()
+
+    if webview is None:
+        err = globals().get("_WEBVIEW_IMPORT_ERROR")
+        log.error("pywebview 載入失敗: %s", err)
+        _show_fatal_error(
+            "缺少依賴：pywebview",
+            "無法載入 pywebview，請先安裝依賴：\n\npip install -r requirements.txt\n\n"
+            f"錯誤：{err}",
+        )
+        return 2
+
+    # 基本資源檢查：避免黑畫面或神祕崩潰
+    index_html = WEB_DIR / "index.html"
+    if not index_html.exists():
+        msg = f"找不到前端入口檔：{index_html}"
+        log.error(msg)
+        _show_fatal_error("資源缺失", msg)
+        return 3
+
     # 创建后端 API 桥接对象
     api = AppApi()
+
     if sys.platform == "win32":
-        import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AimerWT.v2")
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("AimerWT.v2")
+        except Exception:
+            log.debug("設定 AppUserModelID 失敗", exc_info=True)
 
     # 窗口尺寸参数
     window_width = 1200
     window_height = 740
 
+    start_x = None
+    start_y = None
+
+    def _get_windows_work_area():
+        if sys.platform != "win32":
+            return None
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class POINT(ctypes.Structure):
+                _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+            class RECT(ctypes.Structure):
+                _fields_ = [
+                    ("left", wintypes.LONG),
+                    ("top", wintypes.LONG),
+                    ("right", wintypes.LONG),
+                    ("bottom", wintypes.LONG),
+                ]
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("rcMonitor", RECT),
+                    ("rcWork", RECT),
+                    ("dwFlags", wintypes.DWORD),
+                ]
+
+            user32 = ctypes.windll.user32
+            point = POINT()
+            if not user32.GetCursorPos(ctypes.byref(point)):
+                return None
+
+            # MONITOR_DEFAULTTONEAREST = 2
+            hmonitor = user32.MonitorFromPoint(point, 2)
+            if not hmonitor:
+                return None
+
+            mi = MONITORINFO()
+            mi.cbSize = ctypes.sizeof(MONITORINFO)
+            if not user32.GetMonitorInfoW(hmonitor, ctypes.byref(mi)):
+                return None
+
+            r = mi.rcWork
+            return (int(r.left), int(r.top), int(r.right), int(r.bottom))
+        except Exception:
+            log.debug("取得 Windows 工作區失敗", exc_info=True)
+            return None
+
+    # 置中策略：優先用 Windows 工作區（避開工作列/多螢幕）；不行再退回 webview.screens
     try:
-        # 获取主显示器信息并计算窗口居中坐标
-        screens = webview.screens
-        if screens:
-            primary = screens[0]
-            start_x = (primary.width - window_width) // 2
-            start_y = (primary.height - window_height) // 2
+        work = _get_windows_work_area()
+        if work:
+            left, top, right, bottom = work
+            work_w = max(0, right - left)
+            work_h = max(0, bottom - top)
+            if work_w and work_h:
+                start_x = left + (work_w - window_width) // 2
+                start_y = top + (work_h - window_height) // 2
         else:
-            start_x = None
-            start_y = None
-    except Exception as e:
-        log.error(f"获取屏幕信息失败: {e}")
-        start_x = None
-        start_y = None
+            screens = getattr(webview, "screens", None)
+            if screens:
+                primary = screens[0]
+                start_x = (primary.width - window_width) // 2
+                start_y = (primary.height - window_height) // 2
+    except Exception:
+        log.warning("计算窗口居中坐标失败，改用默认窗口位置", exc_info=True)
 
     # 创建窗口实例（x/y 指定启动位置）
-    window = webview.create_window(
-        title="Aimer WT v2 Beta",
-        url=str(WEB_DIR / "index.html"),
-        js_api=api,
-        width=window_width,
-        height=window_height,
-        x=start_x,
-        y=start_y,
-        min_size=(1000, 700),
-        background_color="#F5F7FA",
-        resizable=True,
-        text_select=False,
-        frameless=True,
-        easy_drag=False,
-    )
+    try:
+        window = webview.create_window(
+            title="Aimer WT v2 Beta",
+            url=str(index_html),
+            js_api=api,
+            width=window_width,
+            height=window_height,
+            x=start_x,
+            y=start_y,
+            min_size=(1000, 700),
+            background_color="#F5F7FA",
+            resizable=True,
+            text_select=False,
+            frameless=True,
+            easy_drag=False,
+        )
+    except Exception as e:
+        log.exception("建立視窗失敗")
+        _show_fatal_error("啟動失敗", f"建立視窗失敗：{e}\n\n詳見 logs/app.log")
+        return 4
 
     # 绑定窗口对象到桥接层
     api.set_window(window)
@@ -1290,6 +1439,7 @@ if __name__ == "__main__":
         try:
             from webview.dom import DOMEventHandler
         except Exception:
+            log.debug("DOMEventHandler 不可用，略過拖放綁定")
             return
 
         def on_drop(e):
@@ -1332,13 +1482,28 @@ if __name__ == "__main__":
         try:
             win.dom.document.events.drop += DOMEventHandler(on_drop, True, True)
         except Exception:
+            log.debug("綁定拖放事件失敗", exc_info=True)
             return
 
     def _on_start(win):
-        _bind_drag_drop(win)
-        on_app_started()
+        try:
+            _bind_drag_drop(win)
+        except Exception:
+            log.exception("_bind_drag_drop 失敗")
 
-    # 4. 启动
+        # 部分 GUI 後端可能忽略 create_window 的 x/y；啟動後補一次置中
+        try:
+            if start_x is not None and start_y is not None and hasattr(win, "move"):
+                win.move(int(start_x), int(start_y))
+        except Exception:
+            log.debug("啟動後移動視窗失敗", exc_info=True)
+
+        try:
+            on_app_started()
+        except Exception:
+            log.exception("on_app_started 失敗")
+
+    # 启动
     icon_path = str(WEB_DIR / "assets" / "logo.ico")
     try:
         # 尝试使用 edgechromium 内核（性能更好）
@@ -1350,7 +1515,21 @@ if __name__ == "__main__":
             gui="edgechromium",
             icon=icon_path,
         )
+        return 0
     except Exception as e:
         log.error(f"Edge Chromium 启动失败，尝试默认模式: {e}")
-        # 降级启动
-        webview.start(_on_start, window, debug=False, http_server=False, icon=icon_path)
+        try:
+            # 降级启动
+            webview.start(_on_start, window, debug=False, http_server=False, icon=icon_path)
+            return 0
+        except Exception as e2:
+            log.exception("webview 啟動失敗（含降級）")
+            _show_fatal_error("啟動失敗", f"webview 啟動失敗：{e2}\n\n詳見 logs/app.log")
+            return 5
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        raise SystemExit(130)
