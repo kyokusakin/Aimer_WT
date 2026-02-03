@@ -77,8 +77,12 @@ class LibraryManager:
         library_dir: 语音包库目录
     """
     
+    SUPPORTED_EXTENSIONS = (".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".tbz2")
+    
     def __init__(self, pending_dir: str | None = None, 
                  library_dir: str | None = None):
+    # 定义支持的压缩格式列表
+
         """
         初始化 LibraryManager。
         
@@ -295,7 +299,7 @@ class LibraryManager:
         try:
             if self.pending_dir.exists():
                 for item in self.pending_dir.iterdir():
-                    if item.suffix.lower() in (".zip", ".rar"):
+                    if item.suffix.lower() in self.SUPPORTED_EXTENSIONS:
                         archives.append(item)
         except PermissionError as e:
             log.error(f"扫描待解压区失败（权限不足）: {e}")
@@ -860,10 +864,10 @@ class LibraryManager:
                             self._extract_with_7z(archive_path, target_dir, progress_callback, base_progress, share_progress, password=password)
                         else:
                             raise
-                elif archive_path.suffix.lower() == ".rar":
+                elif archive_path.suffix.lower() in (".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".tbz2"):
                     self._extract_with_7z(archive_path, target_dir, progress_callback, base_progress, share_progress, password=password)
                 else:
-                    raise Exception("不支持的压缩格式")
+                    raise Exception(f"不支持的压缩格式: {archive_path.suffix}")
                 return
             except ArchivePasswordRequired:
                 if not password_provider:
@@ -913,8 +917,9 @@ class LibraryManager:
         if not zip_path.exists():
             self.log(f"文件不存在: {zip_path}", "ERROR")
             return
-        if zip_path.suffix.lower() not in (".zip", ".rar"):
-            raise ValueError("请选择有效的 .zip 或 .rar 文件")
+        if zip_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
+            ext_list = ", ".join(self.SUPPORTED_EXTENSIONS)
+            raise ValueError(f"不支持的文件格式。支持的格式: {ext_list}")
 
         # 磁盘空间估算与校验
         try:

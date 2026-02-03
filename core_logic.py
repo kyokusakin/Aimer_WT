@@ -132,10 +132,10 @@ class CoreService:
         t.daemon = True
         t.start()
 
-    def auto_detect_game_path(self) -> str | None:
+    def get_windows_game_paths(self) -> str | None:
         """
         在本机上自动定位 War Thunder 安装目录。
-        支持 Windows/Linux/macOS 跨平台搜索。
+        支持 Windows
         
         搜索顺序:
         1. 注册表 (仅 Windows)
@@ -145,6 +145,7 @@ class CoreService:
         Returns:
             找到的游戏路径，未找到则返回 None
         """
+
         system = platform.system()
         log.info(f"[SEARCH] 开始自动搜索游戏路径... (系统: {system})")
         
@@ -193,25 +194,6 @@ class CoreService:
             local_app_data = os.environ.get('LOCALAPPDATA')
             if local_app_data:
                 possible_paths.append(Path(local_app_data) / "WarThunder")
-
-        elif system == "Linux":
-            # Linux Steam 默认路径
-            possible_paths.extend([
-                home / ".steam/steam/steamapps/common/War Thunder",
-                home / ".local/share/Steam/steamapps/common/War Thunder",
-                home / ".steam/debian-installation/steamapps/common/War Thunder",
-                # 其它可能的安装位置
-                Path("/usr/games/WarThunder"),
-                Path("/opt/WarThunder")
-            ])
-        elif system == "Darwin":
-            # macOS Steam 默认路径
-            possible_paths.extend([
-                home / "Library/Application Support/Steam/steamapps/common/War Thunder",
-                Path("/Applications/War Thunder.app"), # 独立客户端
-                Path("/Applications/WarThunderLauncher.app"), # 启动器
-                home / "Applications/War Thunder.app"
-            ])
 
         for p_str in possible_paths:
             path = Path(p_str)
@@ -277,6 +259,68 @@ class CoreService:
         
         log.warning("[FAIL] 未自动找到游戏路径。")
         return None
+
+    def get_linux_game_paths(self):
+        """
+        功能定位:
+        - 在Linux主机上自动定位 War Thunder 安装目录。
+
+        输入输出:
+        - 参数: 无
+        - 返回:
+          - str | None，找到则返回游戏根目录路径字符串，否则返回 None。
+        - 外部资源/依赖:
+          - 标准 Steam 库路径（如 ～/.local/share/Steam/steamapps/common/War Thunder）
+          - Flatpak 或其他常见安装位置（若适用）
+        """
+
+        self.log("开始检索 Linux Steam 库...", "SEARCH")
+        paths = set()
+        
+        # 1. 常见的 Steam 安装位置 (包括 Flatpak)
+        steam_roots = [
+            Path.home() / ".local/share/Steam",
+            Path.home() / ".steam/steam",
+            Path.home() / ".var/app/com.valvesoftware.Steam/.local/share/Steam",
+        ]
+        
+        for root in [r for r in steam_roots if r.exists()]:
+            paths.add(str(root)) # 添加根目录本身作为备选
+            vdf_path = root / "config" / "libraryfolders.vdf"
+            if vdf_path.exists():
+                try:
+                    with open(vdf_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        # 提取所有库路径
+                        found = re.findall(r'"path"\s+"([^"]+)"', content)
+                        paths.update(found)
+                except Exception as e:
+                    self.log(f"解析 VDF 失败: {e}", "WARN")
+
+        # 2. 验证路径
+        for base_path in paths:
+            # Linux 下 Steam 默认文件夹名通常带空格
+            full_path = Path(base_path) / "steamapps/common/War Thunder"
+            if self._check_is_wt_dir(full_path):
+                return str(full_path) # 找到第一个就返回
+                
+        return None
+
+    def auto_detect_game_path(self):
+        """
+        功能定位:
+        - 在本机上自动定位 War Thunder 安装目录(跨平台支持)。
+
+        输入输出:
+        - 参数: 无
+        - 返回:
+          - str | None，找到则返回游戏根目录路径字符串，否则返回 None。
+        """
+
+        if sys.platform == "win32":
+            return self.get_windows_game_paths()
+        elif sys.platform == "linux":
+            return self.get_linux_game_paths()
 
     def _check_is_wt_dir(self, path: Path) -> bool:
         """
