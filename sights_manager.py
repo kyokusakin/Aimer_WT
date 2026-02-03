@@ -85,7 +85,21 @@ class SightsManager:
         
         if system == "Windows":
             # Windows 官方路径
-            possible_bases.append(Path.home() / "Documents" / "My Games" / "WarThunder" / "Saves")
+            try:
+                import ctypes.wintypes
+                buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+                # CSIDL_PERSONAL = 5 (My Documents), SHGFP_TYPE_CURRENT = 0
+                if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) != 0:
+                    raise SightsPathError("无法通过 Windows API 获取文档路径")
+                
+                if not buf.value:
+                    raise SightsPathError("获取到的 Windows 文档路径为空")
+                     
+                docs_dir = Path(buf.value)
+            except Exception as e:
+                raise SightsPathError(f"获取 Windows 文档目录失败: {e}")
+            
+            possible_bases.append(docs_dir / "My Games" / "WarThunder" / "Saves")
         elif system == "Darwin":
             # macOS 官方路径
             possible_bases.append(Path.home() / "My Games" / "WarThunder" / "Saves")

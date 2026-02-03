@@ -7,7 +7,9 @@
 import os
 import platform
 from pathlib import Path
+from logging import getLogger
 
+log = getLogger(__name__)
 
 def get_app_data_dir() -> Path:
     """
@@ -23,6 +25,17 @@ def get_app_data_dir() -> Path:
     
     if system == "Windows":
         # Windows: 用户文档目录
+        try:
+            import ctypes.wintypes
+            buf = ctypes.create_unicode_buffer(ctypes.wintypes.MAX_PATH)
+            # CSIDL_PERSONAL = 5 (My Documents), SHGFP_TYPE_CURRENT = 0
+            ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf)
+            if buf.value:
+                return Path(buf.value) / "Aimer_WT"
+        except Exception as e:
+            log.error(f"获取 Windows 文档目录时发生错误: {e}")
+            pass
+        # 回退到 Documents 目录
         return Path.home() / "Documents" / "Aimer_WT"
     elif system == "Darwin":
         # macOS: Application Support 目录
